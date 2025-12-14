@@ -97,3 +97,13 @@ unzip -q data.zip
 # results will be printed in the screen and saved to lightning_logs/version_0 folder
 bash eval_all.sh 0
 ```
+
+
+
+
+```bash
+# Pre-generate (đã chạy xong)
+python scripts/pregenerate_ground_truth.py --data_zip data.zip --output_dir data/cached_maps --split all
+# Training với cached spatial maps
+python train.py --config config.yaml
+```
