@@ -37,7 +37,9 @@ cd CoMER
 # install project   
 conda create -y -n CoMER python=3.7
 conda activate CoMER
-conda install pytorch=1.8.1 torchvision=0.2.2 cudatoolkit=11.1 pillow=8.4.0 -c pytorch -c nvidia
+conda install pytorch=1.8.1 torchvision=0.9.1 torchaudio=0.8.1 cudatoolkit=11.1 -c pytorch -c nvidia
+pip install pillow==8.4.0
+# conda install pytorch=1.8.1 torchvision=0.2.2 cudatoolkit=11.1 pillow=8.4.0 -c pytorch -c nvidia
 # training dependency
 conda install pytorch-lightning=1.4.9 torchmetrics=0.6.0 -c conda-forge
 # evaluating dependency
@@ -96,4 +98,14 @@ unzip -q data.zip
 # evaluate model in lightning_logs/version_0 on all CROHME test sets
 # results will be printed in the screen and saved to lightning_logs/version_0 folder
 bash eval_all.sh 0
+```
+
+
+
+
+```bash
+# Pre-generate (đã chạy xong)
+python scripts/pregenerate_ground_truth.py --data_zip data.zip --output_dir data/cached_maps --split all
+# Training với cached spatial maps
+python train.py --config config.yaml
 ```
