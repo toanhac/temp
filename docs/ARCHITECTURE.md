@@ -133,8 +133,43 @@ The decoder consists of stacked transformer layers with the Attention Refinement
 - **Self-Attention**: Standard causal self-attention for autoregressive decoding
 - **Cross-Attention**: Attends to encoder features with coverage mechanism
 - **ARM**: Refines attention weights based on cumulative attention
+- **Spatial-Guided Coverage**: Scales coverage penalty by spatial importance
 
-#### 2.2.4 Loss Function
+#### 2.2.4 Spatial-Guided Coverage (NEW)
+
+When `use_spatial_guide=True`, the ARM module uses spatial maps to modulate coverage penalty:
+
+```
+Standard Coverage (CoMER baseline):
+    penalty = f(cumulative_attention)
+    
+Spatial-Guided Coverage:
+    penalty = f(cumulative_attention) × (1 + α × spatial_map)
+    
+    where:
+        spatial_map[i,j] = 1.0 for stroke regions
+        spatial_map[i,j] = 0.0 for empty regions
+        α = spatial_scale (default: 1.0)
+```
+
+**Effect:**
+- **Stroke regions** (spatial=1): penalty scaled by `(1 + α)` → **stronger penalty** → avoid re-attending
+- **Empty regions** (spatial=0): penalty scaled by `1` → normal penalty
+
+```python
+# In ARM.forward()
+def _apply_spatial_guidance(self, cov, spatial_map, ...):
+    spatial_expanded = expand_spatial_to_attention_shape(spatial_map)
+    scaled_cov = cov * (1.0 + self.spatial_scale * spatial_expanded)
+    return scaled_cov
+```
+
+**Benefits:**
+1. Decoder knows "where strokes are" → avoids repeating attention on same symbol
+2. Multi-stroke symbols (fractions, integrals) handled better
+3. Complements multi-task learning - spatial info used in BOTH encoder AND decoder
+
+#### 2.2.5 Loss Function
 
 The total loss combines recognition loss and spatial prediction loss:
 
@@ -224,9 +259,11 @@ Backward pass:
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| use_spatial_aux | True | Enable spatial auxiliary task |
+| use_spatial_aux | True | Enable spatial auxiliary task (multi-task) |
 | spatial_hidden_channels | 256 | Hidden channels in spatial head |
 | spatial_loss_weight (λ) | 0.5 | Weight for spatial loss |
+| use_spatial_guide | True | Enable spatial-guided coverage (guided decoding) |
+| spatial_scale (α) | 1.0 | Scaling factor for spatial guidance |
 | learning_rate | 0.08 | SGD learning rate |
 | batch_size | 8 | Training batch size |
 
@@ -244,12 +281,17 @@ model:
   dc: 32
   cross_coverage: true
   self_coverage: true
+  # Multi-task Learning (encoder)
   use_spatial_aux: true
   spatial_hidden_channels: 256
   spatial_loss_weight: 0.5
+  # Guided Decoding (decoder)
+  use_spatial_guide: true
+  spatial_scale: 1.0
   
 data:
   use_spatial_maps: true
+  spatial_cache_dir: data/cached_maps
 ```
 
 ---

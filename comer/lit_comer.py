@@ -36,6 +36,8 @@ class LitCoMER(pl.LightningModule):
         use_spatial_aux: bool = False,
         spatial_hidden_channels: int = 256,
         spatial_loss_weight: float = 0.5,
+        use_spatial_guide: bool = False,
+        spatial_scale: float = 1.0,
     ):
         super().__init__()
         self.save_hyperparameters()
@@ -53,10 +55,13 @@ class LitCoMER(pl.LightningModule):
             self_coverage=self_coverage,
             use_spatial_aux=use_spatial_aux,
             spatial_hidden_channels=spatial_hidden_channels,
+            use_spatial_guide=use_spatial_guide,
+            spatial_scale=spatial_scale,
         )
 
         self.exprate_recorder = ExpRateRecorder()
         self.use_spatial_aux = use_spatial_aux
+        self.use_spatial_guide = use_spatial_guide
         self.spatial_loss_weight = spatial_loss_weight
 
     def forward(
@@ -64,9 +69,14 @@ class LitCoMER(pl.LightningModule):
         img: FloatTensor, 
         img_mask: LongTensor, 
         tgt: LongTensor,
+        spatial_map_gt: Optional[FloatTensor] = None,
         return_spatial: bool = False,
     ) -> FloatTensor:
-        return self.comer_model(img, img_mask, tgt, return_spatial=return_spatial)
+        return self.comer_model(
+            img, img_mask, tgt, 
+            spatial_map_gt=spatial_map_gt, 
+            return_spatial=return_spatial
+        )
 
     def compute_spatial_loss(
         self, 
@@ -88,17 +98,27 @@ class LitCoMER(pl.LightningModule):
     def training_step(self, batch: Batch, _):
         tgt, out = to_bi_tgt_out(batch.indices, self.device)
         
-        if self.use_spatial_aux and hasattr(batch, 'spatial_map') and batch.spatial_map is not None:
+        spatial_gt = None
+        if hasattr(batch, 'spatial_map') and batch.spatial_map is not None:
+            spatial_gt = batch.spatial_map.to(self.device)
+        
+        if self.use_spatial_aux and spatial_gt is not None:
             out_hat, spatial_pred = self.comer_model(
-                batch.imgs, batch.mask, tgt, return_spatial=True
+                batch.imgs, batch.mask, tgt, 
+                spatial_map_gt=spatial_gt,
+                return_spatial=True
             )
             rec_loss = ce_loss(out_hat, out)
-            spatial_loss = self.compute_spatial_loss(spatial_pred, batch.spatial_map.to(self.device))
+            spatial_loss = self.compute_spatial_loss(spatial_pred, spatial_gt)
             loss = rec_loss + self.spatial_loss_weight * spatial_loss
             self.log("train_rec_loss", rec_loss, on_step=False, on_epoch=True, sync_dist=True)
             self.log("train_spatial_loss", spatial_loss, on_step=False, on_epoch=True, sync_dist=True)
         else:
-            out_hat = self.comer_model(batch.imgs, batch.mask, tgt, return_spatial=False)
+            out_hat = self.comer_model(
+                batch.imgs, batch.mask, tgt, 
+                spatial_map_gt=spatial_gt,
+                return_spatial=False
+            )
             loss = ce_loss(out_hat, out)
         
         self.log("train_loss", loss, on_step=False, on_epoch=True, sync_dist=True)
@@ -107,16 +127,26 @@ class LitCoMER(pl.LightningModule):
     def validation_step(self, batch: Batch, _):
         tgt, out = to_bi_tgt_out(batch.indices, self.device)
         
-        if self.use_spatial_aux and hasattr(batch, 'spatial_map') and batch.spatial_map is not None:
+        spatial_gt = None
+        if hasattr(batch, 'spatial_map') and batch.spatial_map is not None:
+            spatial_gt = batch.spatial_map.to(self.device)
+        
+        if self.use_spatial_aux and spatial_gt is not None:
             out_hat, spatial_pred = self.comer_model(
-                batch.imgs, batch.mask, tgt, return_spatial=True
+                batch.imgs, batch.mask, tgt, 
+                spatial_map_gt=spatial_gt,
+                return_spatial=True
             )
             rec_loss = ce_loss(out_hat, out)
-            spatial_loss = self.compute_spatial_loss(spatial_pred, batch.spatial_map.to(self.device))
+            spatial_loss = self.compute_spatial_loss(spatial_pred, spatial_gt)
             loss = rec_loss + self.spatial_loss_weight * spatial_loss
             self.log("val_spatial_loss", spatial_loss, on_step=False, on_epoch=True, sync_dist=True)
         else:
-            out_hat = self.comer_model(batch.imgs, batch.mask, tgt, return_spatial=False)
+            out_hat = self.comer_model(
+                batch.imgs, batch.mask, tgt, 
+                spatial_map_gt=spatial_gt,
+                return_spatial=False
+            )
             loss = ce_loss(out_hat, out)
         
         self.log(
@@ -128,7 +158,7 @@ class LitCoMER(pl.LightningModule):
             sync_dist=True,
         )
 
-        hyps = self.approximate_joint_search(batch.imgs, batch.mask)
+        hyps = self.approximate_joint_search(batch.imgs, batch.mask, spatial_gt)
         self.exprate_recorder([h.seq for h in hyps], batch.indices)
         self.log(
             "val_ExpRate",
@@ -139,7 +169,10 @@ class LitCoMER(pl.LightningModule):
         )
 
     def test_step(self, batch: Batch, _):
-        hyps = self.approximate_joint_search(batch.imgs, batch.mask)
+        spatial_gt = None
+        if hasattr(batch, 'spatial_map') and batch.spatial_map is not None:
+            spatial_gt = batch.spatial_map.to(self.device)
+        hyps = self.approximate_joint_search(batch.imgs, batch.mask, spatial_gt)
         self.exprate_recorder([h.seq for h in hyps], batch.indices)
         return batch.img_bases, [vocab.indices2label(h.seq) for h in hyps]
 
@@ -155,9 +188,16 @@ class LitCoMER(pl.LightningModule):
                         f.write(content)
 
     def approximate_joint_search(
-        self, img: FloatTensor, mask: LongTensor
+        self, 
+        img: FloatTensor, 
+        mask: LongTensor,
+        spatial_map: Optional[FloatTensor] = None,
     ) -> List[Hypothesis]:
-        return self.comer_model.beam_search(img, mask, **self.hparams)
+        return self.comer_model.beam_search(
+            img, mask, 
+            spatial_map=spatial_map,
+            **self.hparams
+        )
 
     def configure_optimizers(self):
         optimizer = optim.SGD(

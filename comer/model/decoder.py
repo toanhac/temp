@@ -1,4 +1,4 @@
-from typing import List
+from typing import List, Optional
 
 import torch
 import torch.nn as nn
@@ -24,6 +24,8 @@ def _build_transformer_decoder(
     dc: int,
     cross_coverage: bool,
     self_coverage: bool,
+    use_spatial_guide: bool = False,
+    spatial_scale: float = 1.0,
 ) -> nn.TransformerDecoder:
     decoder_layer = TransformerDecoderLayer(
         d_model=d_model,
@@ -32,7 +34,14 @@ def _build_transformer_decoder(
         dropout=dropout,
     )
     if cross_coverage or self_coverage:
-        arm = AttentionRefinementModule(nhead, dc, cross_coverage, self_coverage)
+        arm = AttentionRefinementModule(
+            nhead, 
+            dc, 
+            cross_coverage, 
+            self_coverage,
+            use_spatial_guide=use_spatial_guide,
+            spatial_scale=spatial_scale,
+        )
     else:
         arm = None
 
@@ -51,6 +60,8 @@ class Decoder(DecodeModel):
         dc: int,
         cross_coverage: bool,
         self_coverage: bool,
+        use_spatial_guide: bool = False,
+        spatial_scale: float = 1.0,
     ):
         super().__init__()
 
@@ -59,7 +70,6 @@ class Decoder(DecodeModel):
         )
 
         self.pos_enc = WordPosEnc(d_model=d_model)
-
         self.norm = nn.LayerNorm(d_model)
 
         self.model = _build_transformer_decoder(
@@ -71,44 +81,32 @@ class Decoder(DecodeModel):
             dc=dc,
             cross_coverage=cross_coverage,
             self_coverage=self_coverage,
+            use_spatial_guide=use_spatial_guide,
+            spatial_scale=spatial_scale,
         )
 
         self.proj = nn.Linear(d_model, vocab_size)
 
     def _build_attention_mask(self, length):
-        # lazily create causal attention mask, with full attention between the vision tokens
-        # pytorch uses additive attention mask; fill with -inf
         mask = torch.full(
             (length, length), fill_value=1, dtype=torch.bool, device=self.device
         )
-        mask.triu_(1)  # zero out the lower diagonal
+        mask.triu_(1)
         return mask
 
     def forward(
-        self, src: FloatTensor, src_mask: LongTensor, tgt: LongTensor
+        self, 
+        src: FloatTensor, 
+        src_mask: LongTensor, 
+        tgt: LongTensor,
+        spatial_map: Optional[FloatTensor] = None,
     ) -> FloatTensor:
-        """generate output for tgt
-
-        Parameters
-        ----------
-        src : FloatTensor
-            [b, h, w, d]
-        src_mask: LongTensor
-            [b, h, w]
-        tgt : LongTensor
-            [b, l]
-
-        Returns
-        -------
-        FloatTensor
-            [b, l, vocab_size]
-        """
         _, l = tgt.size()
         tgt_mask = self._build_attention_mask(l)
         tgt_pad_mask = tgt == vocab.PAD_IDX
 
-        tgt = self.word_embed(tgt)  # [b, l, d]
-        tgt = self.pos_enc(tgt)  # [b, l, d]
+        tgt = self.word_embed(tgt)
+        tgt = self.pos_enc(tgt)
         tgt = self.norm(tgt)
 
         h = src.shape[1]
@@ -123,6 +121,7 @@ class Decoder(DecodeModel):
             tgt_mask=tgt_mask,
             tgt_key_padding_mask=tgt_pad_mask,
             memory_key_padding_mask=src_mask,
+            spatial_map=spatial_map,
         )
 
         out = rearrange(out, "l b d -> b l d")
@@ -131,8 +130,12 @@ class Decoder(DecodeModel):
         return out
 
     def transform(
-        self, src: List[FloatTensor], src_mask: List[LongTensor], input_ids: LongTensor
+        self, 
+        src: List[FloatTensor], 
+        src_mask: List[LongTensor], 
+        input_ids: LongTensor,
+        spatial_map: Optional[FloatTensor] = None,
     ) -> FloatTensor:
         assert len(src) == 1 and len(src_mask) == 1
-        word_out = self(src[0], src_mask[0], input_ids)
+        word_out = self.forward(src[0], src_mask[0], input_ids, spatial_map=spatial_map)
         return word_out
