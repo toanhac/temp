@@ -11,9 +11,9 @@ trainer:
         monitor: val_ExpRate
         mode: max
         filename: '{epoch}-{step}-{val_ExpRate:.4f}'
-  #gpus: 0, 1, 2, 3
-  #accelerator: ddp
-  gpus: 1
+  pus: 0, 1
+  accelerator: ddp
+  #gpus: 1
   check_val_every_n_epoch: 2
   max_epochs: 300
   deterministic: true
@@ -47,4 +47,4 @@ data:
   scale_aug: true
   use_spatial_maps: true
   spatial_cache_dir: data/cached_maps
-  generate_spatial_on_fly: true
+  generate_spatial_on_fly: false
