@@ -13,6 +13,7 @@ from comer.model.transformer.transformer_decoder import (
     TransformerDecoderLayer,
 )
 from comer.utils.generation_utils import DecodeModel
+from comer.utils.utils import Hypothesis
 
 
 def _build_transformer_decoder(
@@ -86,6 +87,7 @@ class Decoder(DecodeModel):
         )
 
         self.proj = nn.Linear(d_model, vocab_size)
+        self._cached_spatial_map = None
 
     def _build_attention_mask(self, length):
         mask = torch.full(
@@ -134,8 +136,32 @@ class Decoder(DecodeModel):
         src: List[FloatTensor], 
         src_mask: List[LongTensor], 
         input_ids: LongTensor,
-        spatial_map: Optional[FloatTensor] = None,
     ) -> FloatTensor:
         assert len(src) == 1 and len(src_mask) == 1
+        spatial_map = self._cached_spatial_map
+        if spatial_map is not None:
+            batch_size = input_ids.shape[0]
+            if spatial_map.shape[0] != batch_size:
+                spatial_map = spatial_map.repeat(batch_size // spatial_map.shape[0] + 1, 1, 1, 1)[:batch_size]
         word_out = self.forward(src[0], src_mask[0], input_ids, spatial_map=spatial_map)
         return word_out
+
+    def beam_search(
+        self,
+        src: List[FloatTensor],
+        src_mask: List[LongTensor],
+        beam_size: int,
+        max_len: int,
+        alpha: float,
+        early_stopping: bool,
+        temperature: float,
+        spatial_map: Optional[FloatTensor] = None,
+    ) -> List[Hypothesis]:
+        self._cached_spatial_map = spatial_map
+        try:
+            result = super().beam_search(
+                src, src_mask, beam_size, max_len, alpha, early_stopping, temperature
+            )
+        finally:
+            self._cached_spatial_map = None
+        return result
