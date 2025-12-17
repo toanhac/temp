@@ -11,7 +11,9 @@ trainer:
         monitor: val_ExpRate
         mode: max
         filename: '{epoch}-{step}-{val_ExpRate:.4f}'
-  gpus: 1
+  #gpus: 1
+  gpus: 0,1,2,3
+  accelerator: ddp
   check_val_every_n_epoch: 2
   max_epochs: 300
   deterministic: true
@@ -37,13 +39,13 @@ model:
   use_spatial_aux: true
   use_relation_aux: true
   spatial_hidden_channels: 256
-  spatial_loss_weight: 0.5      # λ_s in L_total = L_rec + λ_s*L_spatial + λ_r*L_relation
-  relation_loss_weight: 0.3     # λ_r
+  spatial_loss_weight: 0.4      
+  relation_loss_weight: 0.4
   
   # Guided coverage attention
-  use_guided_coverage: true     # Enable guided coverage (uses both spatial and relation)
-  alpha_spatial: 0.3            # α_s: spatial guidance strength
-  alpha_relation: 0.2           # α_r: relation guidance strength
+  use_guided_coverage: true
+  alpha_spatial: 0.3
+  alpha_relation: 0.3
   
   # Beam search
   beam_size: 10
