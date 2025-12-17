@@ -38,6 +38,7 @@ class TransformerDecoder(nn.Module):
         tgt_key_padding_mask: Optional[Tensor] = None,
         memory_key_padding_mask: Optional[Tensor] = None,
         spatial_map: Optional[Tensor] = None,
+        relation_map: Optional[Tensor] = None,
     ) -> Tensor:
         output = tgt
 
@@ -59,6 +60,7 @@ class TransformerDecoder(nn.Module):
                     memory_key_padding_mask, 
                     height,
                     spatial_map=spatial_map,
+                    relation_map=relation_map,
                 )
 
         if self.norm is not None:

@@ -14,6 +14,19 @@ from comer.utils.utils import (ExpRateRecorder, Hypothesis, ce_loss,
 
 
 class LitCoMER(pl.LightningModule):
+    """
+    PyTorch Lightning module for CoMER with Multi-Task Learning.
+    
+    Supports:
+    1. Main task: HMER (sequence recognition)
+    2. Auxiliary task 1: Spatial distribution recovery
+    3. Auxiliary task 2: Structural relation prediction
+    4. Guided coverage attention using spatial and relation maps
+    
+    Loss function (from temp-2.pdf):
+    L_total = L_rec + λ_s · L_spatial + λ_r · L_relation
+    """
+    
     def __init__(
         self,
         d_model: int,
@@ -33,9 +46,17 @@ class LitCoMER(pl.LightningModule):
         temperature: float,
         learning_rate: float,
         patience: int,
+        # Multi-task learning parameters
         use_spatial_aux: bool = False,
+        use_relation_aux: bool = False,
+        spatial_loss_weight: float = 0.5,  # λ_s
+        relation_loss_weight: float = 0.3,  # λ_r
+        # Guided coverage parameters
+        use_guided_coverage: bool = False,
+        alpha_spatial: float = 0.3,  # α_s for guided coverage
+        alpha_relation: float = 0.2,  # α_r for guided coverage
+        # Legacy parameters (backward compatibility)
         spatial_hidden_channels: int = 256,
-        spatial_loss_weight: float = 0.5,
         use_spatial_guide: bool = False,
         spatial_scale: float = 1.0,
     ):
@@ -55,14 +76,22 @@ class LitCoMER(pl.LightningModule):
             self_coverage=self_coverage,
             use_spatial_aux=use_spatial_aux,
             spatial_hidden_channels=spatial_hidden_channels,
-            use_spatial_guide=use_spatial_guide,
+            use_spatial_guide=use_spatial_guide or use_guided_coverage,
             spatial_scale=spatial_scale,
+            # New guided coverage params
+            use_guided_coverage=use_guided_coverage,
+            alpha_spatial=alpha_spatial,
+            alpha_relation=alpha_relation,
         )
 
         self.exprate_recorder = ExpRateRecorder()
+        
+        # Multi-task config
         self.use_spatial_aux = use_spatial_aux
-        self.use_spatial_guide = use_spatial_guide
+        self.use_relation_aux = use_relation_aux
+        self.use_guided_coverage = use_guided_coverage
         self.spatial_loss_weight = spatial_loss_weight
+        self.relation_loss_weight = relation_loss_weight
 
     def forward(
         self, 
@@ -70,12 +99,16 @@ class LitCoMER(pl.LightningModule):
         img_mask: LongTensor, 
         tgt: LongTensor,
         spatial_map_gt: Optional[FloatTensor] = None,
+        relation_map_gt: Optional[FloatTensor] = None,
         return_spatial: bool = False,
+        return_relation: bool = False,
     ) -> FloatTensor:
         return self.comer_model(
             img, img_mask, tgt, 
-            spatial_map_gt=spatial_map_gt, 
-            return_spatial=return_spatial
+            spatial_map_gt=spatial_map_gt,
+            relation_map_gt=relation_map_gt,
+            return_spatial=return_spatial,
+            return_relation=return_relation,
         )
 
     def compute_spatial_loss(
@@ -83,6 +116,7 @@ class LitCoMER(pl.LightningModule):
         spatial_pred: FloatTensor, 
         spatial_gt: FloatTensor
     ) -> FloatTensor:
+        """Compute spatial recovery loss using Smooth L1."""
         if spatial_gt.dim() == 3:
             spatial_gt = spatial_gt.unsqueeze(1)
         if spatial_pred.shape[2:] != spatial_gt.shape[2:]:
@@ -95,70 +129,150 @@ class LitCoMER(pl.LightningModule):
         loss = F.smooth_l1_loss(spatial_pred, spatial_gt)
         return loss
 
-    def training_step(self, batch: Batch, _):
-        tgt, out = to_bi_tgt_out(batch.indices, self.device)
+    def compute_relation_loss(
+        self,
+        relation_pred: FloatTensor,
+        relation_gt: FloatTensor,
+        ignore_class_0: bool = True,
+    ) -> FloatTensor:
+        """
+        Compute multi-label relation loss using Binary Cross-Entropy.
         
+        Each channel is an independent binary classification.
+        """
+        if relation_pred.shape[2:] != relation_gt.shape[2:]:
+            relation_gt = F.interpolate(
+                relation_gt,
+                size=relation_pred.shape[2:],
+                mode='bilinear',
+                align_corners=False
+            )
+        
+        # Skip channel 0 (NONE) if specified
+        if ignore_class_0 and relation_pred.shape[1] > 1:
+            relation_pred = relation_pred[:, 1:, :, :]
+            relation_gt = relation_gt[:, 1:, :, :]
+        
+        # Clamp GT values to [0, 1] for BCE
+        relation_gt = relation_gt.clamp(0, 1)
+        
+        loss = F.binary_cross_entropy(relation_pred, relation_gt)
+        return loss
+
+    def _get_auxiliary_gt(self, batch: Batch):
+        """Extract spatial and relation GT from batch."""
         spatial_gt = None
+        relation_gt = None
+        
         if hasattr(batch, 'spatial_map') and batch.spatial_map is not None:
             spatial_gt = batch.spatial_map.to(self.device)
         
-        if self.use_spatial_aux and spatial_gt is not None:
-            out_hat, spatial_pred = self.comer_model(
-                batch.imgs, batch.mask, tgt, 
-                spatial_map_gt=spatial_gt,
-                return_spatial=True
-            )
-            rec_loss = ce_loss(out_hat, out)
-            spatial_loss = self.compute_spatial_loss(spatial_pred, spatial_gt)
-            loss = rec_loss + self.spatial_loss_weight * spatial_loss
-            self.log("train_rec_loss", rec_loss, on_step=False, on_epoch=True, sync_dist=True)
-            self.log("train_spatial_loss", spatial_loss, on_step=False, on_epoch=True, sync_dist=True)
-        else:
-            out_hat = self.comer_model(
-                batch.imgs, batch.mask, tgt, 
-                spatial_map_gt=spatial_gt,
-                return_spatial=False
-            )
-            loss = ce_loss(out_hat, out)
+        if hasattr(batch, 'relation_map') and batch.relation_map is not None:
+            relation_gt = batch.relation_map.to(self.device)
         
-        self.log("train_loss", loss, on_step=False, on_epoch=True, sync_dist=True)
-        return loss
+        return spatial_gt, relation_gt
+
+    def training_step(self, batch: Batch, _):
+        tgt, out = to_bi_tgt_out(batch.indices, self.device)
+        spatial_gt, relation_gt = self._get_auxiliary_gt(batch)
+        
+        # Determine what auxiliary outputs we need
+        need_spatial = self.use_spatial_aux and spatial_gt is not None
+        need_relation = self.use_relation_aux and relation_gt is not None
+        
+        # Forward pass
+        outputs = self.comer_model(
+            batch.imgs, batch.mask, tgt,
+            spatial_map_gt=spatial_gt,
+            relation_map_gt=relation_gt,
+            return_spatial=need_spatial,
+            return_relation=need_relation,
+        )
+        
+        # Unpack outputs
+        if need_spatial and need_relation:
+            out_hat, spatial_pred, relation_pred = outputs
+        elif need_spatial:
+            out_hat, spatial_pred = outputs
+            relation_pred = None
+        elif need_relation:
+            out_hat, relation_pred = outputs
+            spatial_pred = None
+        else:
+            out_hat = outputs
+            spatial_pred = None
+            relation_pred = None
+        
+        # Compute losses
+        rec_loss = ce_loss(out_hat, out)
+        total_loss = rec_loss
+        
+        self.log("train_rec_loss", rec_loss, on_step=False, on_epoch=True, sync_dist=True)
+        
+        if need_spatial and spatial_pred is not None:
+            spatial_loss = self.compute_spatial_loss(spatial_pred, spatial_gt)
+            total_loss = total_loss + self.spatial_loss_weight * spatial_loss
+            self.log("train_spatial_loss", spatial_loss, on_step=False, on_epoch=True, sync_dist=True)
+        
+        if need_relation and relation_pred is not None:
+            relation_loss = self.compute_relation_loss(relation_pred, relation_gt)
+            total_loss = total_loss + self.relation_loss_weight * relation_loss
+            self.log("train_relation_loss", relation_loss, on_step=False, on_epoch=True, sync_dist=True)
+        
+        self.log("train_loss", total_loss, on_step=False, on_epoch=True, sync_dist=True)
+        return total_loss
 
     def validation_step(self, batch: Batch, _):
         tgt, out = to_bi_tgt_out(batch.indices, self.device)
+        spatial_gt, relation_gt = self._get_auxiliary_gt(batch)
         
-        spatial_gt = None
-        if hasattr(batch, 'spatial_map') and batch.spatial_map is not None:
-            spatial_gt = batch.spatial_map.to(self.device)
+        need_spatial = self.use_spatial_aux and spatial_gt is not None
+        need_relation = self.use_relation_aux and relation_gt is not None
         
-        if self.use_spatial_aux and spatial_gt is not None:
-            out_hat, spatial_pred = self.comer_model(
-                batch.imgs, batch.mask, tgt, 
-                spatial_map_gt=spatial_gt,
-                return_spatial=True
-            )
-            rec_loss = ce_loss(out_hat, out)
-            spatial_loss = self.compute_spatial_loss(spatial_pred, spatial_gt)
-            loss = rec_loss + self.spatial_loss_weight * spatial_loss
-            self.log("val_spatial_loss", spatial_loss, on_step=False, on_epoch=True, sync_dist=True)
+        outputs = self.comer_model(
+            batch.imgs, batch.mask, tgt,
+            spatial_map_gt=spatial_gt,
+            relation_map_gt=relation_gt,
+            return_spatial=need_spatial,
+            return_relation=need_relation,
+        )
+        
+        if need_spatial and need_relation:
+            out_hat, spatial_pred, relation_pred = outputs
+        elif need_spatial:
+            out_hat, spatial_pred = outputs
+            relation_pred = None
+        elif need_relation:
+            out_hat, relation_pred = outputs
+            spatial_pred = None
         else:
-            out_hat = self.comer_model(
-                batch.imgs, batch.mask, tgt, 
-                spatial_map_gt=spatial_gt,
-                return_spatial=False
-            )
-            loss = ce_loss(out_hat, out)
+            out_hat = outputs
+            spatial_pred = None
+            relation_pred = None
+        
+        rec_loss = ce_loss(out_hat, out)
+        total_loss = rec_loss
+        
+        if need_spatial and spatial_pred is not None:
+            spatial_loss = self.compute_spatial_loss(spatial_pred, spatial_gt)
+            total_loss = total_loss + self.spatial_loss_weight * spatial_loss
+            self.log("val_spatial_loss", spatial_loss, on_step=False, on_epoch=True, sync_dist=True)
+        
+        if need_relation and relation_pred is not None:
+            relation_loss = self.compute_relation_loss(relation_pred, relation_gt)
+            total_loss = total_loss + self.relation_loss_weight * relation_loss
+            self.log("val_relation_loss", relation_loss, on_step=False, on_epoch=True, sync_dist=True)
         
         self.log(
             "val_loss",
-            loss,
+            total_loss,
             on_step=False,
             on_epoch=True,
             prog_bar=True,
             sync_dist=True,
         )
 
-        hyps = self.approximate_joint_search(batch.imgs, batch.mask, spatial_gt)
+        hyps = self.approximate_joint_search(batch.imgs, batch.mask, spatial_gt, relation_gt)
         self.exprate_recorder([h.seq for h in hyps], batch.indices)
         self.log(
             "val_ExpRate",
@@ -169,10 +283,8 @@ class LitCoMER(pl.LightningModule):
         )
 
     def test_step(self, batch: Batch, _):
-        spatial_gt = None
-        if hasattr(batch, 'spatial_map') and batch.spatial_map is not None:
-            spatial_gt = batch.spatial_map.to(self.device)
-        hyps = self.approximate_joint_search(batch.imgs, batch.mask, spatial_gt)
+        spatial_gt, relation_gt = self._get_auxiliary_gt(batch)
+        hyps = self.approximate_joint_search(batch.imgs, batch.mask, spatial_gt, relation_gt)
         self.exprate_recorder([h.seq for h in hyps], batch.indices)
         return batch.img_bases, [vocab.indices2label(h.seq) for h in hyps]
 
@@ -192,10 +304,12 @@ class LitCoMER(pl.LightningModule):
         img: FloatTensor, 
         mask: LongTensor,
         spatial_map: Optional[FloatTensor] = None,
+        relation_map: Optional[FloatTensor] = None,
     ) -> List[Hypothesis]:
         return self.comer_model.beam_search(
             img, mask, 
             spatial_map=spatial_map,
+            relation_map=relation_map,
             **self.hparams
         )
 
@@ -222,3 +336,4 @@ class LitCoMER(pl.LightningModule):
         }
 
         return {"optimizer": optimizer, "lr_scheduler": scheduler}
+

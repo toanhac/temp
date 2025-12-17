@@ -26,7 +26,10 @@ def _build_transformer_decoder(
     cross_coverage: bool,
     self_coverage: bool,
     use_spatial_guide: bool = False,
+    use_guided_coverage: bool = False,
     spatial_scale: float = 1.0,
+    alpha_spatial: float = 0.3,
+    alpha_relation: float = 0.2,
 ) -> nn.TransformerDecoder:
     decoder_layer = TransformerDecoderLayer(
         d_model=d_model,
@@ -41,7 +44,10 @@ def _build_transformer_decoder(
             cross_coverage, 
             self_coverage,
             use_spatial_guide=use_spatial_guide,
+            use_guided_coverage=use_guided_coverage,
             spatial_scale=spatial_scale,
+            alpha_spatial=alpha_spatial,
+            alpha_relation=alpha_relation,
         )
     else:
         arm = None
@@ -62,7 +68,10 @@ class Decoder(DecodeModel):
         cross_coverage: bool,
         self_coverage: bool,
         use_spatial_guide: bool = False,
+        use_guided_coverage: bool = False,
         spatial_scale: float = 1.0,
+        alpha_spatial: float = 0.3,
+        alpha_relation: float = 0.2,
     ):
         super().__init__()
 
@@ -83,11 +92,15 @@ class Decoder(DecodeModel):
             cross_coverage=cross_coverage,
             self_coverage=self_coverage,
             use_spatial_guide=use_spatial_guide,
+            use_guided_coverage=use_guided_coverage,
             spatial_scale=spatial_scale,
+            alpha_spatial=alpha_spatial,
+            alpha_relation=alpha_relation,
         )
 
         self.proj = nn.Linear(d_model, vocab_size)
         self._cached_spatial_map = None
+        self._cached_relation_map = None
 
     def _build_attention_mask(self, length):
         mask = torch.full(
@@ -102,6 +115,7 @@ class Decoder(DecodeModel):
         src_mask: LongTensor, 
         tgt: LongTensor,
         spatial_map: Optional[FloatTensor] = None,
+        relation_map: Optional[FloatTensor] = None,
     ) -> FloatTensor:
         _, l = tgt.size()
         tgt_mask = self._build_attention_mask(l)
@@ -124,6 +138,7 @@ class Decoder(DecodeModel):
             tgt_key_padding_mask=tgt_pad_mask,
             memory_key_padding_mask=src_mask,
             spatial_map=spatial_map,
+            relation_map=relation_map,
         )
 
         out = rearrange(out, "l b d -> b l d")
@@ -139,11 +154,23 @@ class Decoder(DecodeModel):
     ) -> FloatTensor:
         assert len(src) == 1 and len(src_mask) == 1
         spatial_map = self._cached_spatial_map
+        relation_map = self._cached_relation_map
+        
+        batch_size = input_ids.shape[0]
+        
         if spatial_map is not None:
-            batch_size = input_ids.shape[0]
             if spatial_map.shape[0] != batch_size:
                 spatial_map = spatial_map.repeat(batch_size // spatial_map.shape[0] + 1, 1, 1, 1)[:batch_size]
-        word_out = self.forward(src[0], src_mask[0], input_ids, spatial_map=spatial_map)
+        
+        if relation_map is not None:
+            if relation_map.shape[0] != batch_size:
+                relation_map = relation_map.repeat(batch_size // relation_map.shape[0] + 1, 1, 1, 1)[:batch_size]
+        
+        word_out = self.forward(
+            src[0], src_mask[0], input_ids, 
+            spatial_map=spatial_map,
+            relation_map=relation_map,
+        )
         return word_out
 
     def beam_search(
@@ -156,12 +183,16 @@ class Decoder(DecodeModel):
         early_stopping: bool,
         temperature: float,
         spatial_map: Optional[FloatTensor] = None,
+        relation_map: Optional[FloatTensor] = None,
     ) -> List[Hypothesis]:
         self._cached_spatial_map = spatial_map
+        self._cached_relation_map = relation_map
         try:
             result = super().beam_search(
                 src, src_mask, beam_size, max_len, alpha, early_stopping, temperature
             )
         finally:
             self._cached_spatial_map = None
+            self._cached_relation_map = None
         return result
+
