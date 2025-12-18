@@ -288,13 +288,19 @@ Examples:
     print("COMPLETE!")
     print(f"Total success: {total_success}")
     print(f"Total errors: {total_errors}")
-    print(f"Cached maps saved to: {output_dir / args.split}")
+    if args.split == 'all':
+        print(f"Cached maps saved to:")
+        for s in splits:
+            print(f"  - {output_dir / s}")
+    else:
+        print(f"Cached maps saved to: {output_dir / args.split}")
     print("=" * 70)
     
     print("\nExample usage to load cached ground truth:")
     print("```python")
     print("import numpy as np")
-    print(f"data = np.load('{output_dir / args.split}/sample_gt.npz')")
+    example_split = 'train' if args.split == 'all' else args.split
+    print(f"data = np.load('{output_dir / example_split}/sample_gt.npz')")
     print("spatial_map = data['spatial_map']   # Shape: (1, H', W')")
     print("relation_map = data['relation_map'] # Shape: (7, H', W') - MULTI-LABEL")
     print("```")
