@@ -11,9 +11,9 @@ trainer:
         monitor: val_ExpRate
         mode: max
         filename: '{epoch}-{step}-{val_ExpRate:.4f}'
-  gpus: 1
-  # gpus: 0,1,2,3
-  # accelerator: ddp
+  #gpus: 1
+  gpus: 0,1
+  accelerator: ddp
   check_val_every_n_epoch: 2
   max_epochs: 300
   deterministic: true
@@ -27,8 +27,8 @@ model:
   # Decoder
   nhead: 8
   num_decoder_layers: 3
-  dim_feedforward: 512
-  dropout: 0.2
+  dim_feedforward: 1024
+  dropout: 0.4
   
   # Coverage (ARM)
   dc: 32
@@ -39,12 +39,12 @@ model:
   use_spatial_aux: true
   use_relation_aux: true
   spatial_hidden_channels: 256
-  spatial_loss_weight: 0.15      
-  relation_loss_weight: 0.15
+  spatial_loss_weight: 0.1      
+  relation_loss_weight: 0.1
   
   # Guided coverage attention
   use_guided_coverage: true
-  alpha_spatial: 0.1
+  alpha_spatial: 0.15
   alpha_relation: 0.1
   
   # Beam search
