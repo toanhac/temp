@@ -35,17 +35,13 @@
 ```bash
 cd CoMER
 # install project   
-conda create -y -n CoMER python=3.7
-conda activate CoMER
-conda install pytorch=1.8.1 torchvision=0.9.1 torchaudio=0.8.1 cudatoolkit=11.1 -c pytorch -c nvidia
-# conda install pytorch=1.8.1 torchvision=0.2.2 cudatoolkit=11.1 pillow=8.4.0 -c pytorch -c nvidia
-# training dependency
+conda create -y -n SRSC python=3.9
+conda activate SRSC
+conda install pytorch==1.10.0 torchvision==0.11.0 cudatoolkit=11.3 -c pytorch -c nvidia
 conda install pytorch-lightning=1.4.9 torchmetrics=0.6.0 -c conda-forge
-# evaluating dependency
-conda install pandoc=1.19.2.1 -c conda-forge
+conda install pandoc=2.19 -c conda-forge
 pip install -e .
-pip uninstall opencv-python -y
-pip install opencv-python-headless
+pip uninstall opencv-python -y && pip install opencv-python-headless
  ```
 
 ## Training
