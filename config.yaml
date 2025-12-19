@@ -12,7 +12,7 @@ trainer:
         mode: max
         filename: '{epoch}-{step}-{val_ExpRate:.4f}'
   #gpus: 1
-  gpus: 0,1
+  gpus: 0,1,2,3,4,5
   accelerator: ddp
   check_val_every_n_epoch: 2
   max_epochs: 300
@@ -39,6 +39,7 @@ model:
   use_spatial_aux: true
   use_relation_aux: true
   spatial_hidden_channels: 256
+  relation_hidden_channels: 256
   spatial_loss_weight: 0.1      
   relation_loss_weight: 0.1
   

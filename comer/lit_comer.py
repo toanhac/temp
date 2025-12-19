@@ -55,8 +55,10 @@ class LitCoMER(pl.LightningModule):
         use_guided_coverage: bool = False,
         alpha_spatial: float = 0.3,  # α_s for guided coverage
         alpha_relation: float = 0.2,  # α_r for guided coverage
-        # Legacy parameters (backward compatibility)
+        # Head parameters
         spatial_hidden_channels: int = 256,
+        relation_hidden_channels: int = 128,
+        # Legacy parameters (backward compatibility)
         use_spatial_guide: bool = False,
         spatial_scale: float = 1.0,
     ):
@@ -75,10 +77,12 @@ class LitCoMER(pl.LightningModule):
             cross_coverage=cross_coverage,
             self_coverage=self_coverage,
             use_spatial_aux=use_spatial_aux,
+            use_relation_aux=use_relation_aux,
             spatial_hidden_channels=spatial_hidden_channels,
+            relation_hidden_channels=relation_hidden_channels,
             use_spatial_guide=use_spatial_guide or use_guided_coverage,
             spatial_scale=spatial_scale,
-            # New guided coverage params
+            # Guided coverage params
             use_guided_coverage=use_guided_coverage,
             alpha_spatial=alpha_spatial,
             alpha_relation=alpha_relation,
@@ -213,7 +217,7 @@ class LitCoMER(pl.LightningModule):
             spatial_loss = self.compute_spatial_loss(spatial_pred, spatial_gt)
             total_loss = total_loss + self.spatial_loss_weight * spatial_loss
             self.log("train_spatial_loss", spatial_loss, on_step=False, on_epoch=True, sync_dist=True)
-        
+    
         if need_relation and relation_pred is not None:
             relation_loss = self.compute_relation_loss(relation_pred, relation_gt)
             total_loss = total_loss + self.relation_loss_weight * relation_loss
