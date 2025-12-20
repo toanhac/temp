@@ -40,13 +40,13 @@ model:
   use_relation_aux: true
   spatial_hidden_channels: 256
   relation_hidden_channels: 256
-  spatial_loss_weight: 0.1      
-  relation_loss_weight: 0.1
+  spatial_loss_weight: 0.15      
+  relation_loss_weight: 0.15
   
   # Guided coverage attention
   use_guided_coverage: true
-  alpha_spatial: 0.15
-  alpha_relation: 0.1
+  alpha_spatial: 0.1
+  alpha_relation: 0.2
   
   # Beam search
   beam_size: 10
