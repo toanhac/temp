@@ -122,7 +122,7 @@ class DenseNet(nn.Module):
             n_channels += growth_rate
         return nn.Sequential(*layers)
 
-    def forward(self, x, x_mask):
+    def forward(self, x, x_mask, return_intermediate: bool = False):
         out = self.conv1(x)
         out = self.norm1(out)
         out_mask = x_mask[:, 0::2, 0::2]
@@ -133,20 +133,55 @@ class DenseNet(nn.Module):
         out = self.trans1(out)
         out_mask = out_mask[:, 0::2, 0::2]
         out = self.dense2(out)
+        
+        # F_8x: after dense2, before trans2 (stride 8)
+        f_8x = out
+        f_8x_mask = out_mask
+        
         out = self.trans2(out)
         out_mask = out_mask[:, 0::2, 0::2]
         out = self.dense3(out)
         out = self.post_norm(out)
+        
+        if return_intermediate:
+            # out is F_16x (stride 16), f_8x is stride 8
+            return out, out_mask, f_8x, f_8x_mask
         return out, out_mask
 
 
 class Encoder(pl.LightningModule):
-    def __init__(self, d_model: int, growth_rate: int, num_layers: int):
+    def __init__(
+        self, 
+        d_model: int, 
+        growth_rate: int, 
+        num_layers: int,
+        fusion_out_channels: int = 128,
+    ):
         super().__init__()
 
         self.model = DenseNet(growth_rate=growth_rate, num_layers=num_layers)
-
-        self.feature_proj = nn.Conv2d(self.model.out_channels, d_model, kernel_size=1)
+        
+        # Calculate intermediate channel sizes
+        self.f_16x_channels = self.model.out_channels  # After dense3
+        
+        # F_8x channels: after dense2, before trans2
+        # Initial: 2*growth_rate, after dense1+trans1: floor((2*gr + n*gr)*0.5)
+        # After dense2: that + n*gr
+        n_dense = num_layers
+        after_dense1 = 2 * growth_rate + n_dense * growth_rate
+        after_trans1 = int(math.floor(after_dense1 * 0.5))
+        self.f_8x_channels = after_trans1 + n_dense * growth_rate
+        
+        # Feature Fusion: 16x→8x
+        from .multiscale_modules import LightweightFeatureFusion
+        self.fusion = LightweightFeatureFusion(
+            deep_channels=self.f_16x_channels,
+            shallow_channels=self.f_8x_channels,
+            out_channels=fusion_out_channels,
+        )
+        
+        # Project fused features to d_model
+        self.feature_proj = nn.Conv2d(fusion_out_channels, d_model, kernel_size=1)
 
         self.pos_enc_2d = ImgPosEnc(d_model, normalize=True)
 
@@ -155,7 +190,7 @@ class Encoder(pl.LightningModule):
     def forward(
         self, img: FloatTensor, img_mask: LongTensor
     ) -> Tuple[FloatTensor, LongTensor]:
-        """encode image to feature
+        """encode image to feature with 16x→8x fusion
 
         Parameters
         ----------
@@ -167,18 +202,23 @@ class Encoder(pl.LightningModule):
         Returns
         -------
         Tuple[FloatTensor, LongTensor]
-            [b, h, w, d], [b, h, w]
+            [b, h/8, w/8, d], [b, h/8, w/8] - fused features at stride 8
         """
-        # extract feature
-        feature, mask = self.model(img, img_mask)
-        feature = self.feature_proj(feature)
+        # Extract features with intermediate
+        f_16x, _, f_8x, f_8x_mask = self.model(img, img_mask, return_intermediate=True)
+        
+        # Feature fusion: 16x→8x
+        fused = self.fusion(f_16x, f_8x)  # [B, fusion_channels, H/8, W/8]
+        
+        # Project to d_model
+        feature = self.feature_proj(fused)
 
-        # proj
+        # Rearrange to [B, H, W, D]
         feature = rearrange(feature, "b d h w -> b h w d")
 
-        # positional encoding
-        feature = self.pos_enc_2d(feature, mask)
+        # Positional encoding
+        feature = self.pos_enc_2d(feature, f_8x_mask)
         feature = self.norm(feature)
 
-        # flat to 1-D
-        return feature, mask
+        return feature, f_8x_mask
+

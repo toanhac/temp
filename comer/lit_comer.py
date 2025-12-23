@@ -46,6 +46,8 @@ class LitCoMER(pl.LightningModule):
         temperature: float,
         learning_rate: float,
         patience: int,
+        # Feature fusion parameters
+        fusion_out_channels: int = 128,
         # Multi-task learning parameters
         use_spatial_aux: bool = False,
         use_relation_aux: bool = False,
@@ -76,6 +78,7 @@ class LitCoMER(pl.LightningModule):
             dc=dc,
             cross_coverage=cross_coverage,
             self_coverage=self_coverage,
+            fusion_out_channels=fusion_out_channels,
             use_spatial_aux=use_spatial_aux,
             use_relation_aux=use_relation_aux,
             spatial_hidden_channels=spatial_hidden_channels,

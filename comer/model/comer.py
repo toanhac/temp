@@ -9,69 +9,18 @@ from comer.utils.utils import Hypothesis
 
 from .decoder import Decoder
 from .encoder import Encoder
-from .spatial_head import SpatialPredictionHead
-
-
-class RelationPredictionHead(nn.Module):
-    """
-    Predicts multi-label relation map from encoder features.
-    
-    Outputs [B, num_classes, H, W] with independent sigmoid activations
-    for multi-label classification.
-    """
-    
-    def __init__(
-        self, 
-        in_channels: int = 256, 
-        hidden_channels: int = 128,
-        num_classes: int = 7,
-    ):
-        super().__init__()
-        
-        self.conv = nn.Sequential(
-            nn.Conv2d(in_channels, hidden_channels, kernel_size=3, padding=1, bias=False),
-            nn.BatchNorm2d(hidden_channels),
-            nn.ReLU(inplace=True),
-            nn.Conv2d(hidden_channels, hidden_channels, kernel_size=3, padding=1, bias=False),
-            nn.BatchNorm2d(hidden_channels),
-            nn.ReLU(inplace=True),
-            nn.Conv2d(hidden_channels, num_classes, kernel_size=1),
-            nn.Sigmoid(),  # Multi-label (independent per class)
-        )
-        
-        self._init_weights()
-    
-    def _init_weights(self):
-        for m in self.modules():
-            if isinstance(m, nn.Conv2d):
-                nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
-                if m.bias is not None:
-                    nn.init.zeros_(m.bias)
-            elif isinstance(m, nn.BatchNorm2d):
-                nn.init.ones_(m.weight)
-                nn.init.zeros_(m.bias)
-    
-    def forward(self, feature: FloatTensor) -> FloatTensor:
-        """
-        Args:
-            feature: [B, H, W, D] encoder output
-            
-        Returns:
-            relation_map: [B, num_classes, H, W]
-        """
-        # Permute from [B, H, W, D] to [B, D, H, W]
-        x = feature.permute(0, 3, 1, 2)
-        return self.conv(x)
+from .auxiliary_heads import SpatialHead, RelationHead
 
 
 class CoMER(pl.LightningModule):
     """
     CoMER with Multi-Task Learning and Guided Coverage.
     
-    Supports:
-    - Spatial prediction auxiliary task
-    - Relation prediction auxiliary task  
-    - Guided coverage attention using spatial and relation maps
+    Features:
+    - 16x→8x Feature Fusion for higher resolution
+    - Spatial prediction with CoordConv + DeformableConv
+    - Relation prediction with GlobalContextBlock
+    - Guided coverage attention
     """
     
     def __init__(
@@ -86,10 +35,12 @@ class CoMER(pl.LightningModule):
         dc: int,
         cross_coverage: bool,
         self_coverage: bool,
+        # Feature fusion
+        fusion_out_channels: int = 128,
         # Auxiliary task options
         use_spatial_aux: bool = False,
         use_relation_aux: bool = False,
-        spatial_hidden_channels: int = 256,
+        spatial_hidden_channels: int = 64,  # Reduced for bottleneck
         relation_hidden_channels: int = 128,
         num_relation_classes: int = 7,
         # Guided coverage options
@@ -102,7 +53,10 @@ class CoMER(pl.LightningModule):
         super().__init__()
 
         self.encoder = Encoder(
-            d_model=d_model, growth_rate=growth_rate, num_layers=num_layers
+            d_model=d_model, 
+            growth_rate=growth_rate, 
+            num_layers=num_layers,
+            fusion_out_channels=fusion_out_channels,
         )
         
         # Determine decoder guidance mode
@@ -131,20 +85,20 @@ class CoMER(pl.LightningModule):
         self.use_spatial_guide = use_spatial_guide
         self.use_guided_coverage = use_guided_coverage
         
-        # Auxiliary heads
+        # Auxiliary heads (using enhanced versions from auxiliary_heads.py)
         self.spatial_head = None
         self.relation_head = None
         
         if use_spatial_aux:
-            self.spatial_head = SpatialPredictionHead(
-                in_channels=d_model,
-                hidden_channels=spatial_hidden_channels,
+            self.spatial_head = SpatialHead(
+                d_model=d_model,
+                hidden_dim=spatial_hidden_channels,
             )
         
         if use_relation_aux:
-            self.relation_head = RelationPredictionHead(
-                in_channels=d_model,
-                hidden_channels=relation_hidden_channels,
+            self.relation_head = RelationHead(
+                d_model=d_model,
+                hidden_dim=relation_hidden_channels,
                 num_classes=num_relation_classes,
             )
 

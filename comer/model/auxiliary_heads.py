@@ -4,7 +4,10 @@ Auxiliary Task Heads for Multi-Task Learning
 
 This module contains the prediction heads for:
 1. SpatialHead: Predicts spatial distribution map [B, 1, H, W]
+   - Uses CoordConv for position awareness
+   - Uses DeformableConv for shape-adaptive receptive fields
 2. RelationHead: Predicts multi-label relation map [B, 7, H, W]
+   - Uses GlobalContextBlock for long-range dependencies
 
 These heads are attached to the encoder output and trained with
 auxiliary losses alongside the main recognition task.
@@ -15,13 +18,18 @@ import torch.nn as nn
 import torch.nn.functional as F
 from typing import Tuple
 
+from torchvision.ops import DeformConv2d
+
+from .multiscale_modules import CoordConv, GlobalContextBlock
+
 
 class SpatialHead(nn.Module):
     """
-    Predicts spatial distribution (stroke density) map from encoder features.
+    Spatial Head with CoordConv + DeformableConv.
     
-    This head learns to distinguish foreground (strokes) from background,
-    forcing the encoder to learn localized features.
+    Improvements:
+    - CoordConv: Adds (i,j) coordinate channels for absolute position awareness
+    - DeformConv: Learns offset to adapt kernel to character shapes (curves, slants)
     
     Input: Encoder features [B, H, W, D] 
     Output: Spatial map [B, 1, H, W] with values in [0, 1]
@@ -32,18 +40,26 @@ class SpatialHead(nn.Module):
     def __init__(self, d_model: int = 256, hidden_dim: int = 64):
         super().__init__()
         
-        self.conv = nn.Sequential(
-            # Feature compression
-            nn.Conv2d(d_model, hidden_dim, kernel_size=3, padding=1, bias=False),
-            nn.BatchNorm2d(hidden_dim),
-            nn.ReLU(inplace=True),
-            
-            # Refinement
-            nn.Conv2d(hidden_dim, hidden_dim, kernel_size=3, padding=1, bias=False),
-            nn.BatchNorm2d(hidden_dim),
-            nn.ReLU(inplace=True),
-            
-            # Output
+        # CoordConv: adds 2 coordinate channels, project to hidden_dim
+        self.coord_conv = CoordConv(d_model, hidden_dim, kernel_size=3, padding=1)
+        self.bn1 = nn.BatchNorm2d(hidden_dim)
+        
+        # Offset prediction for DeformConv
+        # DeformConv2d with 3x3 kernel needs 2*3*3=18 offset channels
+        self.offset_conv = nn.Conv2d(hidden_dim, 18, kernel_size=3, padding=1)
+        
+        # DeformableConv: shape-adaptive convolution
+        self.deform_conv = DeformConv2d(
+            in_channels=hidden_dim,
+            out_channels=hidden_dim,
+            kernel_size=3,
+            padding=1,
+            bias=False
+        )
+        self.bn2 = nn.BatchNorm2d(hidden_dim)
+        
+        # Output layer
+        self.output = nn.Sequential(
             nn.Conv2d(hidden_dim, 1, kernel_size=1),
             nn.Sigmoid()  # Output in [0, 1]
         )
@@ -59,6 +75,10 @@ class SpatialHead(nn.Module):
             elif isinstance(m, nn.BatchNorm2d):
                 nn.init.ones_(m.weight)
                 nn.init.zeros_(m.bias)
+        
+        # Initialize offset to zero (start with regular conv behavior)
+        nn.init.zeros_(self.offset_conv.weight)
+        nn.init.zeros_(self.offset_conv.bias)
     
     def forward(self, features: torch.Tensor) -> torch.Tensor:
         """
@@ -70,12 +90,26 @@ class SpatialHead(nn.Module):
         """
         # Permute from [B, H, W, D] to [B, D, H, W]
         x = features.permute(0, 3, 1, 2)
-        return self.conv(x)
+        
+        # CoordConv layer
+        x = F.relu(self.bn1(self.coord_conv(x)), inplace=True)
+        
+        # DeformableConv layer
+        offset = self.offset_conv(x)
+        x = self.deform_conv(x, offset)
+        x = F.relu(self.bn2(x), inplace=True)
+        
+        # Output
+        return self.output(x)
 
 
 class RelationHead(nn.Module):
     """
-    Predicts multi-label relation map from encoder features.
+    Relation Head with Global Context Block.
+    
+    Improvements:
+    - GlobalContextBlock: Lightweight global context modeling for long-range dependencies
+      (e.g., numerator-denominator relationship in fractions)
     
     Each pixel can have MULTIPLE relation labels active simultaneously.
     For example, a pixel might be both INSIDE (sqrt) and ABOVE (numerator).
@@ -100,18 +134,25 @@ class RelationHead(nn.Module):
         
         self.num_classes = num_classes
         
-        self.conv = nn.Sequential(
-            # Feature compression
-            nn.Conv2d(d_model, hidden_dim, kernel_size=3, padding=1, bias=False),
+        # Initial projection
+        self.proj = nn.Sequential(
+            nn.Conv2d(d_model, hidden_dim, kernel_size=1, bias=False),
             nn.BatchNorm2d(hidden_dim),
             nn.ReLU(inplace=True),
-            
-            # Refinement with larger receptive field
+        )
+        
+        # Global Context Block for long-range dependencies
+        self.gc_block = GlobalContextBlock(hidden_dim, reduction_ratio=4)
+        
+        # Refinement
+        self.refine = nn.Sequential(
             nn.Conv2d(hidden_dim, hidden_dim, kernel_size=3, padding=1, bias=False),
             nn.BatchNorm2d(hidden_dim),
             nn.ReLU(inplace=True),
-            
-            # Multi-label output
+        )
+        
+        # Multi-label output
+        self.output = nn.Sequential(
             nn.Conv2d(hidden_dim, num_classes, kernel_size=1),
             nn.Sigmoid()  # Multi-label, NOT softmax
         )
@@ -137,7 +178,18 @@ class RelationHead(nn.Module):
             relation_map: [B, C, H, W] - multi-label relation probabilities
         """
         x = features.permute(0, 3, 1, 2)  # [B, D, H, W]
-        return self.conv(x)
+        
+        # Project to hidden_dim
+        x = self.proj(x)
+        
+        # Global context for long-range dependencies
+        x = self.gc_block(x)
+        
+        # Refinement
+        x = self.refine(x)
+        
+        # Output
+        return self.output(x)
 
 
 def compute_spatial_loss(
