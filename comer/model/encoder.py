@@ -165,14 +165,12 @@ class Encoder(pl.LightningModule):
         self.f_16x_channels = self.model.out_channels  # After dense3
         
         # F_8x channels: after dense2, before trans2
-        # Initial: 2*growth_rate, after dense1+trans1: floor((2*gr + n*gr)*0.5)
-        # After dense2: that + n*gr
         n_dense = num_layers
         after_dense1 = 2 * growth_rate + n_dense * growth_rate
         after_trans1 = int(math.floor(after_dense1 * 0.5))
         self.f_8x_channels = after_trans1 + n_dense * growth_rate
         
-        # Feature Fusion: 16x→8x
+        # Feature Fusion: 16x→8x (for auxiliary heads only)
         from .multiscale_modules import LightweightFeatureFusion
         self.fusion = LightweightFeatureFusion(
             deep_channels=self.f_16x_channels,
@@ -180,8 +178,11 @@ class Encoder(pl.LightningModule):
             out_channels=fusion_out_channels,
         )
         
-        # Project fused features to d_model
-        self.feature_proj = nn.Conv2d(fusion_out_channels, d_model, kernel_size=1)
+        # Project F_16x to d_model (for decoder - stride 16)
+        self.feature_proj = nn.Conv2d(self.f_16x_channels, d_model, kernel_size=1)
+        
+        # Project fused features to d_model (for auxiliary heads - stride 8)
+        self.fused_proj = nn.Conv2d(fusion_out_channels, d_model, kernel_size=1)
 
         self.pos_enc_2d = ImgPosEnc(d_model, normalize=True)
 
@@ -189,8 +190,8 @@ class Encoder(pl.LightningModule):
 
     def forward(
         self, img: FloatTensor, img_mask: LongTensor
-    ) -> Tuple[FloatTensor, LongTensor]:
-        """encode image to feature with 16x→8x fusion
+    ) -> Tuple[FloatTensor, LongTensor, FloatTensor, LongTensor]:
+        """encode image to features for decoder and auxiliary heads
 
         Parameters
         ----------
@@ -201,24 +202,28 @@ class Encoder(pl.LightningModule):
 
         Returns
         -------
-        Tuple[FloatTensor, LongTensor]
-            [b, h/8, w/8, d], [b, h/8, w/8] - fused features at stride 8
+        Tuple[FloatTensor, LongTensor, FloatTensor, LongTensor]
+            feature_16x: [b, h/16, w/16, d] - for decoder (stride 16)
+            mask_16x: [b, h/16, w/16]
+            feature_8x: [b, h/8, w/8, d] - for auxiliary heads (stride 8)  
+            mask_8x: [b, h/8, w/8]
         """
         # Extract features with intermediate
-        f_16x, _, f_8x, f_8x_mask = self.model(img, img_mask, return_intermediate=True)
+        f_16x, mask_16x, f_8x, mask_8x = self.model(img, img_mask, return_intermediate=True)
         
-        # Feature fusion: 16x→8x
+        # Process F_16x for decoder (stride 16)
+        feature_16x = self.feature_proj(f_16x)
+        feature_16x = rearrange(feature_16x, "b d h w -> b h w d")
+        feature_16x = self.pos_enc_2d(feature_16x, mask_16x)
+        feature_16x = self.norm(feature_16x)
+        
+        # Feature fusion: 16x→8x for auxiliary heads (stride 8)
         fused = self.fusion(f_16x, f_8x)  # [B, fusion_channels, H/8, W/8]
-        
-        # Project to d_model
-        feature = self.feature_proj(fused)
+        feature_8x = self.fused_proj(fused)
+        feature_8x = rearrange(feature_8x, "b d h w -> b h w d")
+        feature_8x = self.pos_enc_2d(feature_8x, mask_8x)
+        feature_8x = self.norm(feature_8x)
 
-        # Rearrange to [B, H, W, D]
-        feature = rearrange(feature, "b d h w -> b h w d")
+        return feature_16x, mask_16x, feature_8x, mask_8x
 
-        # Positional encoding
-        feature = self.pos_enc_2d(feature, f_8x_mask)
-        feature = self.norm(feature)
-
-        return feature, f_8x_mask
 

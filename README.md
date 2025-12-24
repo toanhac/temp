@@ -37,9 +37,9 @@ cd CoMER
 # install project   
 conda create -y -n SRSC python=3.9
 conda activate SRSC
-conda install pytorch==1.10.0 torchvision==0.11.0 cudatoolkit=11.3 -c pytorch -c nvidia
-conda install pytorch-lightning=1.4.9 torchmetrics=0.6.0 -c conda-forge
-conda install pandoc=2.19 -c conda-forge
+conda install -y pytorch==1.10.1 torchvision==0.11.2 cudatoolkit=11.3 -c pytorch -c conda-forge
+conda install -y pytorch-lightning=1.4.9 torchmetrics=0.6.0 -c conda-forge
+conda install -y pandoc=2.19 -c conda-forge
 pip install -e .
 pip uninstall opencv-python -y && pip install opencv-python-headless
  ```
@@ -105,4 +105,6 @@ bash eval_all.sh 0
 python scripts/pregenerate_ground_truth.py --data_zip data.zip --output_dir data/cached_maps --split all
 # Training với cached spatial maps
 python train.py --config config.yaml
+
+python train.py --config config.yaml --trainer.resume_from_checkpoint lightning_logs/version_4/checkpoints/epoch=29-step=45029-val_ExpRate=0.4335.ckpt
 ```

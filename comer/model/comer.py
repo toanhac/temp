@@ -125,17 +125,18 @@ class CoMER(pl.LightningModule):
             Otherwise:
                 decoder_output
         """
-        feature, mask = self.encoder(img, img_mask)
+        # Encoder returns: feature_16x (decoder), mask_16x, feature_8x (aux heads), mask_8x
+        feature_16x, mask_16x, feature_8x, mask_8x = self.encoder(img, img_mask)
         
-        # Compute auxiliary predictions
+        # Compute auxiliary predictions using stride 8 features
         spatial_pred = None
         relation_pred = None
         
         if self.use_spatial_aux and self.spatial_head is not None:
-            spatial_pred = self.spatial_head(feature)
+            spatial_pred = self.spatial_head(feature_8x)
         
         if self.use_relation_aux and self.relation_head is not None:
-            relation_pred = self.relation_head(feature)
+            relation_pred = self.relation_head(feature_8x)
         
         # Determine guidance maps for decoder
         spatial_for_guide = None
@@ -154,9 +155,9 @@ class CoMER(pl.LightningModule):
                 elif relation_pred is not None:
                     relation_for_guide = relation_pred.detach()
         
-        # Double features for bi-directional decoding
-        feature_doubled = torch.cat((feature, feature), dim=0)
-        mask_doubled = torch.cat((mask, mask), dim=0)
+        # Double stride-16 features for bi-directional decoding
+        feature_doubled = torch.cat((feature_16x, feature_16x), dim=0)
+        mask_doubled = torch.cat((mask_16x, mask_16x), dim=0)
         
         if spatial_for_guide is not None:
             spatial_doubled = torch.cat((spatial_for_guide, spatial_for_guide), dim=0)
@@ -168,7 +169,7 @@ class CoMER(pl.LightningModule):
         else:
             relation_doubled = None
         
-        # Decode
+        # Decode using stride-16 features
         out = self.decoder(
             feature_doubled, mask_doubled, tgt, 
             spatial_map=spatial_doubled,
@@ -198,7 +199,8 @@ class CoMER(pl.LightningModule):
         **kwargs,
     ) -> List[Hypothesis]:
         """Beam search with optional guided coverage."""
-        feature, mask = self.encoder(img, img_mask)
+        # Encoder returns: feature_16x (decoder), mask_16x, feature_8x (aux heads), mask_8x
+        feature_16x, mask_16x, feature_8x, mask_8x = self.encoder(img, img_mask)
         
         # Determine guidance maps
         spatial_for_guide = None
@@ -209,32 +211,34 @@ class CoMER(pl.LightningModule):
                 spatial_for_guide = spatial_map
             elif self.use_spatial_aux and self.spatial_head is not None:
                 with torch.no_grad():
-                    spatial_for_guide = self.spatial_head(feature)
+                    spatial_for_guide = self.spatial_head(feature_8x)
             
             if self.use_guided_coverage:
                 if relation_map is not None:
                     relation_for_guide = relation_map
                 elif self.use_relation_aux and self.relation_head is not None:
                     with torch.no_grad():
-                        relation_for_guide = self.relation_head(feature)
+                        relation_for_guide = self.relation_head(feature_8x)
         
+        # Use stride-16 features for decoder
         return self.decoder.beam_search(
-            [feature], [mask], beam_size, max_len, alpha, early_stopping, temperature,
+            [feature_16x], [mask_16x], beam_size, max_len, alpha, early_stopping, temperature,
             spatial_map=spatial_for_guide,
             relation_map=relation_for_guide,
         )
     
     def predict_spatial(self, img: FloatTensor, img_mask: LongTensor) -> Optional[FloatTensor]:
-        """Predict spatial map for a given image."""
+        """Predict spatial map for a given image (using stride 8 features)."""
         if not self.use_spatial_aux or self.spatial_head is None:
             return None
-        feature, mask = self.encoder(img, img_mask)
-        return self.spatial_head(feature)
+        _, _, feature_8x, _ = self.encoder(img, img_mask)
+        return self.spatial_head(feature_8x)
     
     def predict_relation(self, img: FloatTensor, img_mask: LongTensor) -> Optional[FloatTensor]:
-        """Predict relation map for a given image."""
+        """Predict relation map for a given image (using stride 8 features)."""
         if not self.use_relation_aux or self.relation_head is None:
             return None
-        feature, mask = self.encoder(img, img_mask)
-        return self.relation_head(feature)
+        _, _, feature_8x, _ = self.encoder(img, img_mask)
+        return self.relation_head(feature_8x)
+
 
