@@ -55,8 +55,14 @@ class LitCoMER(pl.LightningModule):
         relation_loss_weight: float = 0.3,  # λ_r
         # Guided coverage parameters
         use_guided_coverage: bool = False,
-        alpha_spatial: float = 0.3,  # α_s for guided coverage
-        alpha_relation: float = 0.2,  # α_r for guided coverage
+        alpha_spatial: float = 0.3,
+        alpha_relation: float = 0.2,
+        dynamic_weighting: bool = True,
+        decay_tau_ratio: float = 3.0,
+        coverage_aware_w1: float = 2.0,
+        coverage_aware_w2: float = 1.0,
+        relation_hidden_dim: int = 64,
+        gate_hidden_dim: int = 64,
         # Head parameters
         spatial_hidden_channels: int = 256,
         relation_hidden_channels: int = 128,
@@ -67,6 +73,14 @@ class LitCoMER(pl.LightningModule):
         super().__init__()
         self.save_hyperparameters()
 
+        use_guided_coverage = use_guided_coverage or use_spatial_aux or use_relation_aux
+        
+        if use_guided_coverage:
+            if not use_spatial_aux:
+                use_spatial_aux = True
+            if not use_relation_aux:
+                use_relation_aux = True
+        
         self.comer_model = CoMER(
             d_model=d_model,
             growth_rate=growth_rate,
@@ -85,10 +99,15 @@ class LitCoMER(pl.LightningModule):
             relation_hidden_channels=relation_hidden_channels,
             use_spatial_guide=use_spatial_guide or use_guided_coverage,
             spatial_scale=spatial_scale,
-            # Guided coverage params
             use_guided_coverage=use_guided_coverage,
             alpha_spatial=alpha_spatial,
             alpha_relation=alpha_relation,
+            dynamic_weighting=dynamic_weighting,
+            decay_tau_ratio=decay_tau_ratio,
+            coverage_aware_w1=coverage_aware_w1,
+            coverage_aware_w2=coverage_aware_w2,
+            relation_hidden_dim=relation_hidden_dim,
+            gate_hidden_dim=gate_hidden_dim,
         )
 
         self.exprate_recorder = ExpRateRecorder()
@@ -109,6 +128,7 @@ class LitCoMER(pl.LightningModule):
         relation_map_gt: Optional[FloatTensor] = None,
         return_spatial: bool = False,
         return_relation: bool = False,
+        epoch_idx: int = -1,
     ) -> FloatTensor:
         return self.comer_model(
             img, img_mask, tgt, 
@@ -116,6 +136,7 @@ class LitCoMER(pl.LightningModule):
             relation_map_gt=relation_map_gt,
             return_spatial=return_spatial,
             return_relation=return_relation,
+            epoch_idx=epoch_idx,
         )
 
     def compute_spatial_loss(
@@ -194,6 +215,7 @@ class LitCoMER(pl.LightningModule):
             relation_map_gt=relation_gt,
             return_spatial=need_spatial,
             return_relation=need_relation,
+            epoch_idx=self.current_epoch,
         )
         
         # Unpack outputs

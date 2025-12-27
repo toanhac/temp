@@ -30,6 +30,10 @@ def _build_transformer_decoder(
     spatial_scale: float = 1.0,
     alpha_spatial: float = 0.3,
     alpha_relation: float = 0.2,
+    dynamic_weighting: bool = True,
+    decay_tau_ratio: float = 3.0,
+    coverage_aware_w1: float = 2.0,
+    coverage_aware_w2: float = 1.0,
 ) -> nn.TransformerDecoder:
     decoder_layer = TransformerDecoderLayer(
         d_model=d_model,
@@ -48,6 +52,10 @@ def _build_transformer_decoder(
             spatial_scale=spatial_scale,
             alpha_spatial=alpha_spatial,
             alpha_relation=alpha_relation,
+            dynamic_weighting=dynamic_weighting,
+            decay_tau_ratio=decay_tau_ratio,
+            coverage_aware_w1=coverage_aware_w1,
+            coverage_aware_w2=coverage_aware_w2,
         )
     else:
         arm = None
@@ -72,6 +80,10 @@ class Decoder(DecodeModel):
         spatial_scale: float = 1.0,
         alpha_spatial: float = 0.3,
         alpha_relation: float = 0.2,
+        dynamic_weighting: bool = True,
+        decay_tau_ratio: float = 3.0,
+        coverage_aware_w1: float = 2.0,
+        coverage_aware_w2: float = 1.0,
     ):
         super().__init__()
 
@@ -96,6 +108,10 @@ class Decoder(DecodeModel):
             spatial_scale=spatial_scale,
             alpha_spatial=alpha_spatial,
             alpha_relation=alpha_relation,
+            dynamic_weighting=dynamic_weighting,
+            decay_tau_ratio=decay_tau_ratio,
+            coverage_aware_w1=coverage_aware_w1,
+            coverage_aware_w2=coverage_aware_w2,
         )
 
         self.proj = nn.Linear(d_model, vocab_size)
@@ -116,6 +132,7 @@ class Decoder(DecodeModel):
         tgt: LongTensor,
         spatial_map: Optional[FloatTensor] = None,
         relation_map: Optional[FloatTensor] = None,
+        epoch_idx: int = -1,
     ) -> FloatTensor:
         _, l = tgt.size()
         tgt_mask = self._build_attention_mask(l)
@@ -139,6 +156,7 @@ class Decoder(DecodeModel):
             memory_key_padding_mask=src_mask,
             spatial_map=spatial_map,
             relation_map=relation_map,
+            epoch_idx=epoch_idx,
         )
 
         out = rearrange(out, "l b d -> b l d")

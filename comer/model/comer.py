@@ -35,20 +35,23 @@ class CoMER(pl.LightningModule):
         dc: int,
         cross_coverage: bool,
         self_coverage: bool,
-        # Feature fusion
         fusion_out_channels: int = 128,
-        # Auxiliary task options
         use_spatial_aux: bool = False,
         use_relation_aux: bool = False,
-        spatial_hidden_channels: int = 64,  # Reduced for bottleneck
+        spatial_hidden_channels: int = 64,
         relation_hidden_channels: int = 128,
         num_relation_classes: int = 7,
-        # Guided coverage options
         use_spatial_guide: bool = False,
         use_guided_coverage: bool = False,
         spatial_scale: float = 1.0,
         alpha_spatial: float = 0.3,
         alpha_relation: float = 0.2,
+        dynamic_weighting: bool = True,
+        decay_tau_ratio: float = 3.0,
+        coverage_aware_w1: float = 2.0,
+        coverage_aware_w2: float = 1.0,
+        relation_hidden_dim: int = 64,
+        gate_hidden_dim: int = 64,
     ):
         super().__init__()
 
@@ -59,7 +62,6 @@ class CoMER(pl.LightningModule):
             fusion_out_channels=fusion_out_channels,
         )
         
-        # Determine decoder guidance mode
         decoder_use_spatial_guide = use_spatial_guide or use_guided_coverage
         
         self.decoder = Decoder(
@@ -73,19 +75,20 @@ class CoMER(pl.LightningModule):
             self_coverage=self_coverage,
             use_spatial_guide=decoder_use_spatial_guide,
             spatial_scale=spatial_scale,
-            # Pass guided coverage params if supported by decoder
             use_guided_coverage=use_guided_coverage,
             alpha_spatial=alpha_spatial,
             alpha_relation=alpha_relation,
+            dynamic_weighting=dynamic_weighting,
+            decay_tau_ratio=decay_tau_ratio,
+            coverage_aware_w1=coverage_aware_w1,
+            coverage_aware_w2=coverage_aware_w2,
         )
         
-        # Config flags
         self.use_spatial_aux = use_spatial_aux
         self.use_relation_aux = use_relation_aux
         self.use_spatial_guide = use_spatial_guide
         self.use_guided_coverage = use_guided_coverage
         
-        # Auxiliary heads (using enhanced versions from auxiliary_heads.py)
         self.spatial_head = None
         self.relation_head = None
         
@@ -100,6 +103,8 @@ class CoMER(pl.LightningModule):
                 d_model=d_model,
                 hidden_dim=relation_hidden_channels,
                 num_classes=num_relation_classes,
+                relation_hidden_dim=relation_hidden_dim,
+                use_hierarchical=use_guided_coverage,
             )
 
     def forward(
@@ -111,6 +116,7 @@ class CoMER(pl.LightningModule):
         relation_map_gt: Optional[FloatTensor] = None,
         return_spatial: bool = False,
         return_relation: bool = False,
+        epoch_idx: int = -1,
     ) -> Union[FloatTensor, Tuple[FloatTensor, ...]]:
         """
         Forward pass with optional auxiliary outputs.
@@ -138,12 +144,10 @@ class CoMER(pl.LightningModule):
         if self.use_relation_aux and self.relation_head is not None:
             relation_pred = self.relation_head(feature_8x)
         
-        # Determine guidance maps for decoder
         spatial_for_guide = None
         relation_for_guide = None
         
         if self.use_spatial_guide or self.use_guided_coverage:
-            # Prefer GT during training, fallback to predictions
             if spatial_map_gt is not None:
                 spatial_for_guide = spatial_map_gt
             elif spatial_pred is not None:
@@ -154,6 +158,11 @@ class CoMER(pl.LightningModule):
                     relation_for_guide = relation_map_gt
                 elif relation_pred is not None:
                     relation_for_guide = relation_pred.detach()
+                
+                if relation_for_guide is not None and self.relation_head is not None:
+                    relation_for_guide = self.relation_head.compute_guidance(relation_for_guide)
+                elif relation_for_guide is not None and relation_for_guide.shape[1] > 1:
+                    relation_for_guide = relation_for_guide[:, 1:, :, :].max(dim=1, keepdim=True)[0]
         
         # Double stride-16 features for bi-directional decoding
         feature_doubled = torch.cat((feature_16x, feature_16x), dim=0)
@@ -169,11 +178,11 @@ class CoMER(pl.LightningModule):
         else:
             relation_doubled = None
         
-        # Decode using stride-16 features
         out = self.decoder(
             feature_doubled, mask_doubled, tgt, 
             spatial_map=spatial_doubled,
             relation_map=relation_doubled,
+            epoch_idx=epoch_idx,
         )
         
         # Return requested outputs
@@ -202,7 +211,6 @@ class CoMER(pl.LightningModule):
         # Encoder returns: feature_16x (decoder), mask_16x, feature_8x (aux heads), mask_8x
         feature_16x, mask_16x, feature_8x, mask_8x = self.encoder(img, img_mask)
         
-        # Determine guidance maps
         spatial_for_guide = None
         relation_for_guide = None
         
@@ -218,7 +226,8 @@ class CoMER(pl.LightningModule):
                     relation_for_guide = relation_map
                 elif self.use_relation_aux and self.relation_head is not None:
                     with torch.no_grad():
-                        relation_for_guide = self.relation_head(feature_8x)
+                        relation_pred = self.relation_head(feature_8x)
+                        relation_for_guide = self.relation_head.compute_guidance(relation_pred)
         
         # Use stride-16 features for decoder
         return self.decoder.beam_search(

@@ -39,6 +39,7 @@ class TransformerDecoder(nn.Module):
         memory_key_padding_mask: Optional[Tensor] = None,
         spatial_map: Optional[Tensor] = None,
         relation_map: Optional[Tensor] = None,
+        epoch_idx: int = -1,
     ) -> Tensor:
         output = tgt
 
@@ -61,6 +62,7 @@ class TransformerDecoder(nn.Module):
                     height,
                     spatial_map=spatial_map,
                     relation_map=relation_map,
+                    epoch_idx=epoch_idx,
                 )
 
         if self.norm is not None:
@@ -103,11 +105,39 @@ class TransformerDecoderLayer(nn.Module):
         tgt_key_padding_mask: Optional[Tensor] = None,
         memory_key_padding_mask: Optional[Tensor] = None,
     ) -> Tensor:
+        
+        # tgt2 = self.self_attn(
+        #     tgt, tgt, tgt, attn_mask=tgt_mask, key_padding_mask=tgt_key_padding_mask
+        # )[0]
+        # tgt = tgt + self.dropout1(tgt2)
+        # tgt = self.norm1(tgt)
+
+
+        # tgt2, attn = self.multihead_attn(
+        #     tgt,
+        #     memory,
+        #     memory,
+        #     arm=arm,
+        #     attn_mask=memory_mask,
+        #     key_padding_mask=memory_key_padding_mask,
+        # )
+        # tgt = tgt + self.dropout2(tgt2)
+        # tgt = self.norm2(tgt)
+
+
+        # tgt2 = self.linear2(self.dropout(self.activation(self.linear1(tgt))))
+        # tgt = tgt + self.dropout3(tgt2)
+        # tgt = self.norm3(tgt)
+
+        # ----------------------------------------
+        tgt2 = self.norm1(tgt)
         tgt2 = self.self_attn(
-            tgt, tgt, tgt, attn_mask=tgt_mask, key_padding_mask=tgt_key_padding_mask
+            tgt2, tgt2, tgt2, attn_mask=tgt_mask, key_padding_mask=tgt_key_padding_mask
         )[0]
         tgt = tgt + self.dropout1(tgt2)
-        tgt = self.norm1(tgt)
+        
+        # Pre-LN for cross-attention
+        tgt2 = self.norm2(tgt)
         tgt2, attn = self.multihead_attn(
             tgt,
             memory,
@@ -117,8 +147,10 @@ class TransformerDecoderLayer(nn.Module):
             key_padding_mask=memory_key_padding_mask,
         )
         tgt = tgt + self.dropout2(tgt2)
-        tgt = self.norm2(tgt)
-        tgt2 = self.linear2(self.dropout(self.activation(self.linear1(tgt))))
+        
+        # Pre-LN for FFN
+        tgt2 = self.norm3(tgt)
+        tgt2 = self.linear2(self.dropout(self.activation(self.linear1(tgt2))))
         tgt = tgt + self.dropout3(tgt2)
-        tgt = self.norm3(tgt)
+        
         return tgt, attn

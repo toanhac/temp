@@ -129,33 +129,55 @@ class RelationHead(nn.Module):
     Loss: Binary Cross-Entropy (multi-label classification)
     """
     
-    def __init__(self, d_model: int = 256, hidden_dim: int = 128, num_classes: int = 7):
+    def __init__(self, d_model: int = 256, hidden_dim: int = 128, num_classes: int = 7, relation_hidden_dim: int = 64, use_hierarchical: bool = False):
         super().__init__()
         
         self.num_classes = num_classes
+        self.relation_hidden_dim = relation_hidden_dim
+        self.use_hierarchical = use_hierarchical
         
-        # Initial projection
         self.proj = nn.Sequential(
             nn.Conv2d(d_model, hidden_dim, kernel_size=1, bias=False),
             nn.BatchNorm2d(hidden_dim),
             nn.ReLU(inplace=True),
         )
         
-        # Global Context Block for long-range dependencies
         self.gc_block = GlobalContextBlock(hidden_dim, reduction_ratio=4)
         
-        # Refinement
         self.refine = nn.Sequential(
             nn.Conv2d(hidden_dim, hidden_dim, kernel_size=3, padding=1, bias=False),
             nn.BatchNorm2d(hidden_dim),
             nn.ReLU(inplace=True),
         )
         
-        # Multi-label output
         self.output = nn.Sequential(
             nn.Conv2d(hidden_dim, num_classes, kernel_size=1),
-            nn.Sigmoid()  # Multi-label, NOT softmax
+            nn.Sigmoid()
         )
+        
+        if use_hierarchical:
+            self.vertical_net = nn.Sequential(
+                nn.Conv2d(2, relation_hidden_dim, kernel_size=3, padding=1),
+                nn.ReLU(inplace=True),
+                nn.Conv2d(relation_hidden_dim, 1, kernel_size=1),
+                nn.Sigmoid()
+            )
+            self.script_net = nn.Sequential(
+                nn.Conv2d(2, relation_hidden_dim, kernel_size=3, padding=1),
+                nn.ReLU(inplace=True),
+                nn.Conv2d(relation_hidden_dim, 1, kernel_size=1),
+                nn.Sigmoid()
+            )
+            self.inside_net = nn.Sequential(
+                nn.Conv2d(1, relation_hidden_dim, kernel_size=3, padding=1),
+                nn.ReLU(inplace=True),
+                nn.Conv2d(relation_hidden_dim, 1, kernel_size=1),
+                nn.Sigmoid()
+            )
+            
+            self.alpha_vertical = nn.Parameter(torch.tensor(0.4))
+            self.alpha_script = nn.Parameter(torch.tensor(0.3))
+            self.alpha_inside = nn.Parameter(torch.tensor(0.3))
         
         self._init_weights()
     
@@ -170,26 +192,29 @@ class RelationHead(nn.Module):
                 nn.init.zeros_(m.bias)
     
     def forward(self, features: torch.Tensor) -> torch.Tensor:
-        """
-        Args:
-            features: [B, H, W, D] from encoder
-            
-        Returns:
-            relation_map: [B, C, H, W] - multi-label relation probabilities
-        """
-        x = features.permute(0, 3, 1, 2)  # [B, D, H, W]
-        
-        # Project to hidden_dim
+        x = features.permute(0, 3, 1, 2)
         x = self.proj(x)
-        
-        # Global context for long-range dependencies
         x = self.gc_block(x)
-        
-        # Refinement
         x = self.refine(x)
-        
-        # Output
         return self.output(x)
+    
+    def compute_guidance(self, relation_map: torch.Tensor) -> torch.Tensor:
+        if not self.use_hierarchical:
+            return relation_map.max(dim=1, keepdim=True)[0] if relation_map.shape[1] > 1 else relation_map
+        
+        if relation_map.shape[1] < 7:
+            return relation_map.max(dim=1, keepdim=True)[0] if relation_map.shape[1] > 1 else relation_map
+        
+        vertical = torch.cat([relation_map[:, 2:3], relation_map[:, 3:4]], dim=1)
+        script = torch.cat([relation_map[:, 4:5], relation_map[:, 5:6]], dim=1)
+        inside = relation_map[:, 6:7]
+        
+        g_v = self.vertical_net(vertical)
+        g_s = self.script_net(script)
+        g_i = self.inside_net(inside)
+        
+        alpha_sum = self.alpha_vertical.abs() + self.alpha_script.abs() + self.alpha_inside.abs()
+        return (self.alpha_vertical.abs() * g_v + self.alpha_script.abs() * g_s + self.alpha_inside.abs() * g_i) / alpha_sum
 
 
 def compute_spatial_loss(
