@@ -127,7 +127,9 @@ class RelationHead(nn.Module):
             return relation_map
         
         weights = F.softplus(self.channel_weights)
-        weights[0] = 0.0
+        mask = torch.ones_like(weights)
+        mask[0] = 0.0
+        weights = weights * mask
         weights = weights / (weights.sum() + 1e-8)
         weights = weights.view(1, -1, 1, 1)
         
