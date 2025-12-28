@@ -44,8 +44,8 @@ model:
   
   use_guided_coverage: true
   dynamic_weighting: true
-  alpha_spatial: 1.0
-  alpha_relation: 0.5
+  alpha_spatial: 0.05
+  alpha_relation: 0.05
   decay_tau_ratio: 3.0
   coverage_aware_w1: 2.0
   coverage_aware_w2: 1.0

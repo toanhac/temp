@@ -24,31 +24,13 @@ from .multiscale_modules import CoordConv, GlobalContextBlock
 
 
 class SpatialHead(nn.Module):
-    """
-    Spatial Head with CoordConv + DeformableConv.
-    
-    Improvements:
-    - CoordConv: Adds (i,j) coordinate channels for absolute position awareness
-    - DeformConv: Learns offset to adapt kernel to character shapes (curves, slants)
-    
-    Input: Encoder features [B, H, W, D] 
-    Output: Spatial map [B, 1, H, W] with values in [0, 1]
-    
-    Loss: Smooth L1 Loss (robust to outliers)
-    """
-    
     def __init__(self, d_model: int = 256, hidden_dim: int = 64):
         super().__init__()
         
-        # CoordConv: adds 2 coordinate channels, project to hidden_dim
         self.coord_conv = CoordConv(d_model, hidden_dim, kernel_size=3, padding=1)
         self.bn1 = nn.BatchNorm2d(hidden_dim)
         
-        # Offset prediction for DeformConv
-        # DeformConv2d with 3x3 kernel needs 2*3*3=18 offset channels
         self.offset_conv = nn.Conv2d(hidden_dim, 18, kernel_size=3, padding=1)
-        
-        # DeformableConv: shape-adaptive convolution
         self.deform_conv = DeformConv2d(
             in_channels=hidden_dim,
             out_channels=hidden_dim,
@@ -58,10 +40,15 @@ class SpatialHead(nn.Module):
         )
         self.bn2 = nn.BatchNorm2d(hidden_dim)
         
-        # Output layer
+        self.refine = nn.Sequential(
+            nn.Conv2d(hidden_dim, hidden_dim, kernel_size=3, padding=1, bias=False),
+            nn.BatchNorm2d(hidden_dim),
+            nn.ReLU(inplace=True),
+        )
+        
         self.output = nn.Sequential(
             nn.Conv2d(hidden_dim, 1, kernel_size=1),
-            nn.Sigmoid()  # Output in [0, 1]
+            nn.Sigmoid()
         )
         
         self._init_weights()
@@ -75,60 +62,20 @@ class SpatialHead(nn.Module):
             elif isinstance(m, nn.BatchNorm2d):
                 nn.init.ones_(m.weight)
                 nn.init.zeros_(m.bias)
-        
-        # Initialize offset to zero (start with regular conv behavior)
         nn.init.zeros_(self.offset_conv.weight)
         nn.init.zeros_(self.offset_conv.bias)
     
     def forward(self, features: torch.Tensor) -> torch.Tensor:
-        """
-        Args:
-            features: [B, H, W, D] from encoder (note: BHWD not BDHW)
-            
-        Returns:
-            spatial_map: [B, 1, H, W] - where to focus (stroke regions)
-        """
-        # Permute from [B, H, W, D] to [B, D, H, W]
         x = features.permute(0, 3, 1, 2)
-        
-        # CoordConv layer
         x = F.relu(self.bn1(self.coord_conv(x)), inplace=True)
-        
-        # DeformableConv layer
         offset = self.offset_conv(x)
         x = self.deform_conv(x, offset)
         x = F.relu(self.bn2(x), inplace=True)
-        
-        # Output
+        x = self.refine(x)
         return self.output(x)
 
 
 class RelationHead(nn.Module):
-    """
-    Relation Head with Global Context Block.
-    
-    Improvements:
-    - GlobalContextBlock: Lightweight global context modeling for long-range dependencies
-      (e.g., numerator-denominator relationship in fractions)
-    
-    Each pixel can have MULTIPLE relation labels active simultaneously.
-    For example, a pixel might be both INSIDE (sqrt) and ABOVE (numerator).
-    
-    Input: Encoder features [B, H, W, D]
-    Output: Relation map [B, C, H, W] with values in [0, 1] for each class
-    
-    Classes (C=7):
-        0: NONE (typically not used in loss)
-        1: HORIZONTAL (baseline)
-        2: ABOVE (numerator)
-        3: BELOW (denominator)
-        4: SUPERSCRIPT
-        5: SUBSCRIPT
-        6: INSIDE (sqrt, etc.)
-    
-    Loss: Binary Cross-Entropy (multi-label classification)
-    """
-    
     def __init__(self, d_model: int = 256, hidden_dim: int = 128, num_classes: int = 7):
         super().__init__()
         
@@ -176,32 +123,14 @@ class RelationHead(nn.Module):
         return self.output(x)
     
     def compute_guidance(self, relation_map: torch.Tensor) -> torch.Tensor:
-        """
-        Compute guidance map from relation predictions using learned channel weights.
-        
-        This uses a weighted combination across channels where weights are learned
-        during training through the relation prediction loss.
-        
-        Args:
-            relation_map: [B, C, H, W] relation predictions (C=7 channels)
-            
-        Returns:
-            guidance: [B, 1, H, W] aggregated guidance map
-        """
         if relation_map.shape[1] == 1:
             return relation_map
         
-        # Get normalized weights (softmax ensures they sum to 1, skip channel 0)
-        # Use softplus to ensure positive weights, then normalize
         weights = F.softplus(self.channel_weights)
-        weights[0] = 0.0  # Ensure NONE channel has 0 weight
+        weights[0] = 0.0
         weights = weights / (weights.sum() + 1e-8)
-        
-        # Weighted sum across channels: [B, C, H, W] -> [B, 1, H, W]
-        # weights: [C] -> [1, C, 1, 1] for broadcasting
         weights = weights.view(1, -1, 1, 1)
         
-        # Handle case where relation_map has fewer channels than weights
         num_channels = min(relation_map.shape[1], len(self.channel_weights))
         guidance = (relation_map[:, :num_channels] * weights[:, :num_channels]).sum(dim=1, keepdim=True)
         

@@ -40,6 +40,8 @@ class AttentionRefinementModule(nn.Module):
         coverage_aware_w2: float = 1.0,
         use_spatial_guide: bool = False,
         spatial_scale: float = 1.0,
+        alpha_min: float = 0.1,
+        alpha_max: float = 2.0,
     ):
         super().__init__()
         assert cross_coverage or self_coverage
@@ -48,12 +50,19 @@ class AttentionRefinementModule(nn.Module):
         self.self_coverage = self_coverage
         
         self.use_guided_coverage = use_guided_coverage or use_spatial_guide
-        self.alpha_spatial = alpha_spatial if use_guided_coverage else spatial_scale
-        self.alpha_relation = alpha_relation
         self.dynamic_weighting = dynamic_weighting
         self.decay_tau_ratio = decay_tau_ratio
         self.coverage_aware_w1 = coverage_aware_w1
         self.coverage_aware_w2 = coverage_aware_w2
+        self.alpha_min = alpha_min
+        self.alpha_max = alpha_max
+
+        if self.use_guided_coverage:
+            init_spatial = alpha_spatial if use_guided_coverage else spatial_scale
+            init_relation = alpha_relation
+            self.alpha_spatial_raw = nn.Parameter(torch.tensor(0.0))
+            self.alpha_relation_raw = nn.Parameter(torch.tensor(0.0))
+            self._init_alpha_from_value(init_spatial, init_relation)
 
         if cross_coverage and self_coverage:
             in_chs = 2 * nhead
@@ -64,6 +73,22 @@ class AttentionRefinementModule(nn.Module):
         self.act = nn.ReLU(inplace=True)
         self.proj = nn.Conv2d(dc, nhead, kernel_size=1, bias=False)
         self.post_norm = MaskBatchNorm2d(nhead)
+    
+    def _init_alpha_from_value(self, alpha_s: float, alpha_r: float):
+        import math
+        alpha_s_clamped = max(self.alpha_min, min(self.alpha_max, alpha_s))
+        alpha_r_clamped = max(self.alpha_min, min(self.alpha_max, alpha_r))
+        t_s = (alpha_s_clamped - self.alpha_min) / (self.alpha_max - self.alpha_min)
+        t_r = (alpha_r_clamped - self.alpha_min) / (self.alpha_max - self.alpha_min)
+        eps = 1e-6
+        self.alpha_spatial_raw.data.fill_(math.log((t_s + eps) / (1 - t_s + eps)))
+        self.alpha_relation_raw.data.fill_(math.log((t_r + eps) / (1 - t_r + eps)))
+    
+    def get_alpha_spatial(self) -> Tensor:
+        return self.alpha_min + (self.alpha_max - self.alpha_min) * torch.sigmoid(self.alpha_spatial_raw)
+    
+    def get_alpha_relation(self) -> Tensor:
+        return self.alpha_min + (self.alpha_max - self.alpha_min) * torch.sigmoid(self.alpha_relation_raw)
 
     def forward(
         self, 
@@ -126,6 +151,9 @@ class AttentionRefinementModule(nn.Module):
         
         beta = self._compute_dynamic_weight(epoch_idx) if self.dynamic_weighting else 1.0
         
+        alpha_s = self.get_alpha_spatial()
+        alpha_r = self.get_alpha_relation()
+        
         if spatial_map is not None:
             spatial_resized = self._resize_map(spatial_map, h, w)
             coverage_normalized = coverage_2d.mean(dim=1, keepdim=True)
@@ -139,19 +167,22 @@ class AttentionRefinementModule(nn.Module):
             
             G_s_flat = rearrange(G_s, "b t c h w -> b t (h w c)")
             G_s_flat = repeat(G_s_flat, "b t l -> (b n) t l", n=self.nhead)
-            guidance = guidance + self.alpha_spatial * G_s_flat
+            guidance = guidance + alpha_s * G_s_flat
         
         if relation_map is not None:
             R_guidance = self._compute_relation_guidance(relation_map, h, w, b, t)
-            guidance = guidance + self.alpha_relation * R_guidance
+            guidance = guidance + alpha_r * R_guidance
         
         return beta * guidance
     
     def _compute_dynamic_weight(self, epoch_idx: int, max_epochs: int = 300) -> float:
         if epoch_idx < 0:
             return 0.0
+        warmup_epochs = max_epochs * 0.1
+        if epoch_idx < warmup_epochs:
+            return float(epoch_idx) / warmup_epochs
         tau = max_epochs / self.decay_tau_ratio
-        return torch.exp(torch.tensor(-epoch_idx / tau, dtype=torch.float32)).item()
+        return torch.exp(torch.tensor(-(epoch_idx - warmup_epochs) / tau, dtype=torch.float32)).item()
     
     def _compute_relation_guidance(self, relation_map: Tensor, h: int, w: int, b: int, t: int) -> Tensor:
         if relation_map.shape[1] > 1:
