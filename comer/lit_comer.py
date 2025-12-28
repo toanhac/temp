@@ -46,14 +46,11 @@ class LitCoMER(pl.LightningModule):
         temperature: float,
         learning_rate: float,
         patience: int,
-        # Feature fusion parameters
         fusion_out_channels: int = 128,
-        # Multi-task learning parameters
         use_spatial_aux: bool = False,
         use_relation_aux: bool = False,
-        spatial_loss_weight: float = 0.5,  # λ_s
-        relation_loss_weight: float = 0.3,  # λ_r
-        # Guided coverage parameters
+        spatial_loss_weight: float = 0.5,
+        relation_loss_weight: float = 0.3,
         use_guided_coverage: bool = False,
         alpha_spatial: float = 0.3,
         alpha_relation: float = 0.2,
@@ -61,12 +58,8 @@ class LitCoMER(pl.LightningModule):
         decay_tau_ratio: float = 3.0,
         coverage_aware_w1: float = 2.0,
         coverage_aware_w2: float = 1.0,
-        relation_hidden_dim: int = 64,
-        gate_hidden_dim: int = 64,
-        # Head parameters
         spatial_hidden_channels: int = 256,
         relation_hidden_channels: int = 128,
-        # Legacy parameters (backward compatibility)
         use_spatial_guide: bool = False,
         spatial_scale: float = 1.0,
     ):
@@ -106,8 +99,6 @@ class LitCoMER(pl.LightningModule):
             decay_tau_ratio=decay_tau_ratio,
             coverage_aware_w1=coverage_aware_w1,
             coverage_aware_w2=coverage_aware_w2,
-            relation_hidden_dim=relation_hidden_dim,
-            gate_hidden_dim=gate_hidden_dim,
         )
 
         self.exprate_recorder = ExpRateRecorder()

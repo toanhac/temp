@@ -14,18 +14,16 @@ trainer:
   gpus: 1
   #gpus: 0,1,2,3
   #accelerator: ddp
-  check_val_every_n_epoch: 2
+  check_val_every_n_epoch: 25
   max_epochs: 300
   deterministic: true
 
 model:
-  # Encoder with Feature Fusion (16x→8x)
   d_model: 256
   growth_rate: 24
   num_layers: 16
-  fusion_out_channels: 128  # Bottleneck for fusion
+  fusion_out_channels: 128
   
-  # Decoder
   nhead: 8
   num_decoder_layers: 3
   dim_feedforward: 1024
@@ -39,12 +37,11 @@ model:
   # Multi-task learning (auxiliary tasks)
   use_spatial_aux: true
   use_relation_aux: true
-  spatial_hidden_channels: 128   # Reduced bottleneck
+  spatial_hidden_channels: 128
   relation_hidden_channels: 128
   spatial_loss_weight: 0.1      
   relation_loss_weight: 0.1
   
-  # Guided coverage attention
   use_guided_coverage: true
   dynamic_weighting: true
   alpha_spatial: 1.0
@@ -52,8 +49,6 @@ model:
   decay_tau_ratio: 3.0
   coverage_aware_w1: 2.0
   coverage_aware_w2: 1.0
-  relation_hidden_dim: 64
-  gate_hidden_dim: 64
   
   # Beam search
   beam_size: 10

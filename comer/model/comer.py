@@ -50,8 +50,6 @@ class CoMER(pl.LightningModule):
         decay_tau_ratio: float = 3.0,
         coverage_aware_w1: float = 2.0,
         coverage_aware_w2: float = 1.0,
-        relation_hidden_dim: int = 64,
-        gate_hidden_dim: int = 64,
     ):
         super().__init__()
 
@@ -103,8 +101,6 @@ class CoMER(pl.LightningModule):
                 d_model=d_model,
                 hidden_dim=relation_hidden_channels,
                 num_classes=num_relation_classes,
-                relation_hidden_dim=relation_hidden_dim,
-                use_hierarchical=use_guided_coverage,
             )
 
     def forward(

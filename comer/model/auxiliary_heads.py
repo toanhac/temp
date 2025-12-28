@@ -129,12 +129,10 @@ class RelationHead(nn.Module):
     Loss: Binary Cross-Entropy (multi-label classification)
     """
     
-    def __init__(self, d_model: int = 256, hidden_dim: int = 128, num_classes: int = 7, relation_hidden_dim: int = 64, use_hierarchical: bool = False):
+    def __init__(self, d_model: int = 256, hidden_dim: int = 128, num_classes: int = 7):
         super().__init__()
         
         self.num_classes = num_classes
-        self.relation_hidden_dim = relation_hidden_dim
-        self.use_hierarchical = use_hierarchical
         
         self.proj = nn.Sequential(
             nn.Conv2d(d_model, hidden_dim, kernel_size=1, bias=False),
@@ -155,29 +153,8 @@ class RelationHead(nn.Module):
             nn.Sigmoid()
         )
         
-        if use_hierarchical:
-            self.vertical_net = nn.Sequential(
-                nn.Conv2d(2, relation_hidden_dim, kernel_size=3, padding=1),
-                nn.ReLU(inplace=True),
-                nn.Conv2d(relation_hidden_dim, 1, kernel_size=1),
-                nn.Sigmoid()
-            )
-            self.script_net = nn.Sequential(
-                nn.Conv2d(2, relation_hidden_dim, kernel_size=3, padding=1),
-                nn.ReLU(inplace=True),
-                nn.Conv2d(relation_hidden_dim, 1, kernel_size=1),
-                nn.Sigmoid()
-            )
-            self.inside_net = nn.Sequential(
-                nn.Conv2d(1, relation_hidden_dim, kernel_size=3, padding=1),
-                nn.ReLU(inplace=True),
-                nn.Conv2d(relation_hidden_dim, 1, kernel_size=1),
-                nn.Sigmoid()
-            )
-            
-            self.alpha_vertical = nn.Parameter(torch.tensor(0.4))
-            self.alpha_script = nn.Parameter(torch.tensor(0.3))
-            self.alpha_inside = nn.Parameter(torch.tensor(0.3))
+        initial_weights = torch.tensor([0.0, 0.5, 1.0, 1.0, 1.0, 1.0, 1.0])
+        self.channel_weights = nn.Parameter(initial_weights)
         
         self._init_weights()
     
@@ -199,22 +176,36 @@ class RelationHead(nn.Module):
         return self.output(x)
     
     def compute_guidance(self, relation_map: torch.Tensor) -> torch.Tensor:
-        if not self.use_hierarchical:
-            return relation_map.max(dim=1, keepdim=True)[0] if relation_map.shape[1] > 1 else relation_map
+        """
+        Compute guidance map from relation predictions using learned channel weights.
         
-        if relation_map.shape[1] < 7:
-            return relation_map.max(dim=1, keepdim=True)[0] if relation_map.shape[1] > 1 else relation_map
+        This uses a weighted combination across channels where weights are learned
+        during training through the relation prediction loss.
         
-        vertical = torch.cat([relation_map[:, 2:3], relation_map[:, 3:4]], dim=1)
-        script = torch.cat([relation_map[:, 4:5], relation_map[:, 5:6]], dim=1)
-        inside = relation_map[:, 6:7]
+        Args:
+            relation_map: [B, C, H, W] relation predictions (C=7 channels)
+            
+        Returns:
+            guidance: [B, 1, H, W] aggregated guidance map
+        """
+        if relation_map.shape[1] == 1:
+            return relation_map
         
-        g_v = self.vertical_net(vertical)
-        g_s = self.script_net(script)
-        g_i = self.inside_net(inside)
+        # Get normalized weights (softmax ensures they sum to 1, skip channel 0)
+        # Use softplus to ensure positive weights, then normalize
+        weights = F.softplus(self.channel_weights)
+        weights[0] = 0.0  # Ensure NONE channel has 0 weight
+        weights = weights / (weights.sum() + 1e-8)
         
-        alpha_sum = self.alpha_vertical.abs() + self.alpha_script.abs() + self.alpha_inside.abs()
-        return (self.alpha_vertical.abs() * g_v + self.alpha_script.abs() * g_s + self.alpha_inside.abs() * g_i) / alpha_sum
+        # Weighted sum across channels: [B, C, H, W] -> [B, 1, H, W]
+        # weights: [C] -> [1, C, 1, 1] for broadcasting
+        weights = weights.view(1, -1, 1, 1)
+        
+        # Handle case where relation_map has fewer channels than weights
+        num_channels = min(relation_map.shape[1], len(self.channel_weights))
+        guidance = (relation_map[:, :num_channels] * weights[:, :num_channels]).sum(dim=1, keepdim=True)
+        
+        return guidance
 
 
 def compute_spatial_loss(
