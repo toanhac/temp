@@ -40,7 +40,7 @@ class AttentionRefinementModule(nn.Module):
         coverage_aware_w2: float = 1.0,
         use_spatial_guide: bool = False,
         spatial_scale: float = 1.0,
-        alpha_min: float = 0.1,
+        alpha_min: float = 0.01,
         alpha_max: float = 2.0,
     ):
         super().__init__()
