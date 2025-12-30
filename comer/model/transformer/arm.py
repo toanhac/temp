@@ -34,8 +34,6 @@ class AttentionRefinementModule(nn.Module):
         use_guided_coverage: bool = False,
         alpha_spatial: float = 0.3,
         alpha_relation: float = 0.2,
-        dynamic_weighting: bool = True,
-        decay_tau_ratio: float = 3.0,
         coverage_aware_w1: float = 2.0,
         coverage_aware_w2: float = 1.0,
         use_spatial_guide: bool = False,
@@ -50,8 +48,6 @@ class AttentionRefinementModule(nn.Module):
         self.self_coverage = self_coverage
         
         self.use_guided_coverage = use_guided_coverage or use_spatial_guide
-        self.dynamic_weighting = dynamic_weighting
-        self.decay_tau_ratio = decay_tau_ratio
         self.coverage_aware_w1 = coverage_aware_w1
         self.coverage_aware_w2 = coverage_aware_w2
         self.alpha_min = alpha_min
@@ -132,7 +128,7 @@ class AttentionRefinementModule(nn.Module):
             guidance = self._compute_guidance(
                 spatial_map, relation_map, coverage_2d, b, t, h, w, epoch_idx
             )
-            cov = cov + guidance
+            cov = cov - guidance  # SUBTRACT: positive guidance = encourage attention = reduce coverage
         
         return cov
     
@@ -148,8 +144,6 @@ class AttentionRefinementModule(nn.Module):
         epoch_idx: int = -1,
     ) -> Tensor:
         guidance = torch.zeros(b * self.nhead, t, h * w, device=coverage_2d.device, dtype=coverage_2d.dtype)
-        
-        beta = self._compute_dynamic_weight(epoch_idx) if self.dynamic_weighting else 1.0
         
         alpha_s = self.get_alpha_spatial()
         alpha_r = self.get_alpha_relation()
@@ -173,16 +167,7 @@ class AttentionRefinementModule(nn.Module):
             R_guidance = self._compute_relation_guidance(relation_map, h, w, b, t)
             guidance = guidance + alpha_r * R_guidance
         
-        return beta * guidance
-    
-    def _compute_dynamic_weight(self, epoch_idx: int, max_epochs: int = 300) -> float:
-        if epoch_idx < 0:
-            return 0.0
-        warmup_epochs = max_epochs * 0.1
-        if epoch_idx < warmup_epochs:
-            return float(epoch_idx) / warmup_epochs
-        tau = max_epochs / self.decay_tau_ratio
-        return torch.exp(torch.tensor(-(epoch_idx - warmup_epochs) / tau, dtype=torch.float32)).item()
+        return guidance
     
     def _compute_relation_guidance(self, relation_map: Tensor, h: int, w: int, b: int, t: int) -> Tensor:
         if relation_map.shape[1] > 1:

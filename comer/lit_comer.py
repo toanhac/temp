@@ -54,8 +54,6 @@ class LitCoMER(pl.LightningModule):
         use_guided_coverage: bool = False,
         alpha_spatial: float = 0.3,
         alpha_relation: float = 0.2,
-        dynamic_weighting: bool = True,
-        decay_tau_ratio: float = 3.0,
         coverage_aware_w1: float = 2.0,
         coverage_aware_w2: float = 1.0,
         spatial_hidden_channels: int = 256,
@@ -95,8 +93,6 @@ class LitCoMER(pl.LightningModule):
             use_guided_coverage=use_guided_coverage,
             alpha_spatial=alpha_spatial,
             alpha_relation=alpha_relation,
-            dynamic_weighting=dynamic_weighting,
-            decay_tau_ratio=decay_tau_ratio,
             coverage_aware_w1=coverage_aware_w1,
             coverage_aware_w2=coverage_aware_w2,
         )
@@ -135,7 +131,7 @@ class LitCoMER(pl.LightningModule):
         spatial_pred: FloatTensor, 
         spatial_gt: FloatTensor
     ) -> FloatTensor:
-        """Compute spatial recovery loss using Smooth L1."""
+        """Compute spatial recovery loss using BCE + Dice Loss."""
         if spatial_gt.dim() == 3:
             spatial_gt = spatial_gt.unsqueeze(1)
         if spatial_pred.shape[2:] != spatial_gt.shape[2:]:
@@ -145,8 +141,21 @@ class LitCoMER(pl.LightningModule):
                 mode='bilinear', 
                 align_corners=False
             )
-        loss = F.smooth_l1_loss(spatial_pred, spatial_gt)
-        return loss
+        
+        # Clamp GT to [0, 1] for BCE
+        spatial_gt = spatial_gt.clamp(0, 1)
+        
+        # BCE Loss
+        bce_loss = F.binary_cross_entropy(spatial_pred, spatial_gt)
+        
+        # Dice Loss for better segmentation
+        smooth = 1e-5
+        pred_flat = spatial_pred.view(-1)
+        gt_flat = spatial_gt.view(-1)
+        intersection = (pred_flat * gt_flat).sum()
+        dice_loss = 1 - (2. * intersection + smooth) / (pred_flat.sum() + gt_flat.sum() + smooth)
+        
+        return 0.5 * bce_loss + 0.5 * dice_loss
 
     def compute_relation_loss(
         self,

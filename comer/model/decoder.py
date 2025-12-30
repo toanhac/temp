@@ -30,8 +30,6 @@ def _build_transformer_decoder(
     spatial_scale: float = 1.0,
     alpha_spatial: float = 0.3,
     alpha_relation: float = 0.2,
-    dynamic_weighting: bool = True,
-    decay_tau_ratio: float = 3.0,
     coverage_aware_w1: float = 2.0,
     coverage_aware_w2: float = 1.0,
 ) -> nn.TransformerDecoder:
@@ -52,8 +50,6 @@ def _build_transformer_decoder(
             spatial_scale=spatial_scale,
             alpha_spatial=alpha_spatial,
             alpha_relation=alpha_relation,
-            dynamic_weighting=dynamic_weighting,
-            decay_tau_ratio=decay_tau_ratio,
             coverage_aware_w1=coverage_aware_w1,
             coverage_aware_w2=coverage_aware_w2,
         )
@@ -80,8 +76,6 @@ class Decoder(DecodeModel):
         spatial_scale: float = 1.0,
         alpha_spatial: float = 0.3,
         alpha_relation: float = 0.2,
-        dynamic_weighting: bool = True,
-        decay_tau_ratio: float = 3.0,
         coverage_aware_w1: float = 2.0,
         coverage_aware_w2: float = 1.0,
     ):
@@ -108,8 +102,6 @@ class Decoder(DecodeModel):
             spatial_scale=spatial_scale,
             alpha_spatial=alpha_spatial,
             alpha_relation=alpha_relation,
-            dynamic_weighting=dynamic_weighting,
-            decay_tau_ratio=decay_tau_ratio,
             coverage_aware_w1=coverage_aware_w1,
             coverage_aware_w2=coverage_aware_w2,
         )

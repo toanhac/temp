@@ -46,8 +46,6 @@ class CoMER(pl.LightningModule):
         spatial_scale: float = 1.0,
         alpha_spatial: float = 0.3,
         alpha_relation: float = 0.2,
-        dynamic_weighting: bool = True,
-        decay_tau_ratio: float = 3.0,
         coverage_aware_w1: float = 2.0,
         coverage_aware_w2: float = 1.0,
     ):
@@ -76,8 +74,6 @@ class CoMER(pl.LightningModule):
             use_guided_coverage=use_guided_coverage,
             alpha_spatial=alpha_spatial,
             alpha_relation=alpha_relation,
-            dynamic_weighting=dynamic_weighting,
-            decay_tau_ratio=decay_tau_ratio,
             coverage_aware_w1=coverage_aware_w1,
             coverage_aware_w2=coverage_aware_w2,
         )

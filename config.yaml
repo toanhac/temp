@@ -14,7 +14,7 @@ trainer:
   gpus: 1
   #gpus: 0,1,2,3
   #accelerator: ddp
-  check_val_every_n_epoch: 25
+  check_val_every_n_epoch: 2
   max_epochs: 300
   deterministic: true
 
@@ -39,16 +39,15 @@ model:
   use_relation_aux: true
   spatial_hidden_channels: 128
   relation_hidden_channels: 128
-  spatial_loss_weight: 0.1      
+  spatial_loss_weight: 0.1
   relation_loss_weight: 0.1
   
+  # Guided coverage (learnable alpha)
   use_guided_coverage: true
-  dynamic_weighting: true
   alpha_spatial: 0.05
   alpha_relation: 0.05
-  decay_tau_ratio: 3.0
-  coverage_aware_w1: 2.0
-  coverage_aware_w2: 1.0
+  coverage_aware_w1: 1.0
+  coverage_aware_w2: 0.5
   
   # Beam search
   beam_size: 10
@@ -59,7 +58,7 @@ model:
   
   # Training
   learning_rate: 0.005
-  patience: 20
+  patience: 15
 
 data:
   zipfile_path: data.zip
