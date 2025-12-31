@@ -133,17 +133,6 @@ class Batch:
             relation_map=relation,
         )
 
-    def pin_memory(self) -> "Batch":
-        spatial = self.spatial_map.pin_memory() if self.spatial_map is not None else None
-        relation = self.relation_map.pin_memory() if self.relation_map is not None else None
-        return Batch(
-            img_bases=self.img_bases,
-            imgs=self.imgs.pin_memory(),
-            mask=self.mask.pin_memory(),
-            indices=self.indices,
-            spatial_map=spatial,
-            relation_map=relation,
-        )
 
 
 def collate_fn(batch):
@@ -191,11 +180,11 @@ class MultiTaskCollator:
     def __init__(
         self, 
         cache_dir: Optional[str] = None, 
-        generate_spatial_on_fly: bool = True,
+        generate_gt_on_fly: bool = True,
         use_relation: bool = True,
     ):
         self.cache_dir = Path(cache_dir) if cache_dir else None
-        self.generate_spatial_on_fly = generate_spatial_on_fly
+        self.generate_gt_on_fly = generate_gt_on_fly
         self.use_relation = use_relation
     
     def __call__(self, batch):
@@ -263,7 +252,7 @@ class MultiTaskCollator:
                             pass
             
             # Generate spatial on-the-fly if needed (relation requires pregeneration)
-            if spatial_map is None and self.generate_spatial_on_fly:
+            if spatial_map is None and self.generate_gt_on_fly:
                 target_h, target_w = compute_encoder_output_size(h, w)
                 target_h = max(target_h, 1)
                 target_w = max(target_w, 1)
@@ -329,7 +318,7 @@ class CROHMEDatamodule(pl.LightningDataModule):
         use_spatial_maps: bool = False,
         use_relation_maps: bool = False,
         gt_cache_dir: Optional[str] = None,  # Unified cache dir for both spatial and relation
-        generate_spatial_on_fly: bool = True,
+        generate_gt_on_fly: bool = True,  # Renamed from generate_spatial_on_fly
         # Legacy options (backward compatibility)
         spatial_cache_dir: Optional[str] = None,
     ) -> None:
@@ -346,7 +335,7 @@ class CROHMEDatamodule(pl.LightningDataModule):
         self.use_spatial_maps = use_spatial_maps
         self.use_relation_maps = use_relation_maps
         self.gt_cache_dir = gt_cache_dir or spatial_cache_dir  # Use unified or legacy
-        self.generate_spatial_on_fly = generate_spatial_on_fly
+        self.generate_gt_on_fly = generate_gt_on_fly
 
         print(f"Load data from: {self.zipfile_path}")
         if use_spatial_maps or use_relation_maps:
@@ -354,6 +343,7 @@ class CROHMEDatamodule(pl.LightningDataModule):
             print(f"  Spatial maps: {use_spatial_maps}")
             print(f"  Relation maps: {use_relation_maps}")
             print(f"  Cache dir: {self.gt_cache_dir}")
+            print(f"  Generate GT on-the-fly: {self.generate_gt_on_fly}")
 
     def setup(self, stage: Optional[str] = None) -> None:
         with ZipFile(self.zipfile_path) as archive:
@@ -382,7 +372,7 @@ class CROHMEDatamodule(pl.LightningDataModule):
                 cache_dir = Path(self.gt_cache_dir) / split
             return MultiTaskCollator(
                 cache_dir=cache_dir,
-                generate_spatial_on_fly=self.generate_spatial_on_fly,
+                generate_gt_on_fly=self.generate_gt_on_fly,
                 use_relation=self.use_relation_maps,
             )
         return collate_fn

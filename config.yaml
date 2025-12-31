@@ -72,4 +72,4 @@ data:
   use_spatial_maps: true
   use_relation_maps: true
   gt_cache_dir: data/cached_maps
-  generate_spatial_on_fly: false
+  generate_gt_on_fly: false
