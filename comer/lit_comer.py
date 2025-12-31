@@ -162,11 +162,12 @@ class LitCoMER(pl.LightningModule):
         relation_pred: FloatTensor,
         relation_gt: FloatTensor,
         ignore_class_0: bool = True,
+        focal_gamma: float = 2.0,
     ) -> FloatTensor:
         """
-        Compute multi-label relation loss using Binary Cross-Entropy.
+        Compute multi-label relation loss using Focal Loss.
         
-        Each channel is an independent binary classification.
+        Focal Loss helps with class imbalance by down-weighting easy examples.
         """
         if relation_pred.shape[2:] != relation_gt.shape[2:]:
             relation_gt = F.interpolate(
@@ -181,11 +182,19 @@ class LitCoMER(pl.LightningModule):
             relation_pred = relation_pred[:, 1:, :, :]
             relation_gt = relation_gt[:, 1:, :, :]
         
-        # Clamp GT values to [0, 1] for BCE
+        # Clamp values
         relation_gt = relation_gt.clamp(0, 1)
+        relation_pred = relation_pred.clamp(1e-7, 1 - 1e-7)
         
-        loss = F.binary_cross_entropy(relation_pred, relation_gt)
-        return loss
+        # Focal Loss: FL(p) = -alpha * (1-p)^gamma * log(p)
+        # For binary: p_t = p if y=1 else 1-p
+        p_t = relation_pred * relation_gt + (1 - relation_pred) * (1 - relation_gt)
+        focal_weight = (1 - p_t) ** focal_gamma
+        
+        bce = -relation_gt * torch.log(relation_pred) - (1 - relation_gt) * torch.log(1 - relation_pred)
+        focal_loss = focal_weight * bce
+        
+        return focal_loss.mean()
 
     def _get_auxiliary_gt(self, batch: Batch):
         """Extract spatial and relation GT from batch."""
