@@ -163,9 +163,14 @@ class MultiTaskCollator:
     
     Ground truth files should be named: {img_name}_gt.npz
     With keys: 'spatial_map', 'relation_map'
+    
+    Uses in-memory caching to avoid repeated I/O.
     """
     
     NUM_RELATION_CLASSES = 7
+    
+    # Class-level cache shared across instances
+    _gt_cache = {}
     
     def __init__(
         self, 
@@ -205,26 +210,39 @@ class MultiTaskCollator:
             
             spatial_map = None
             relation_map = None
+            fname = fnames[idx]
             
-            # Try to load from cached file (new format: _gt.npz)
-            if self.cache_dir is not None:
-                cache_path = self.cache_dir / f"{fnames[idx]}_gt.npz"
+            # Check in-memory cache first
+            cache_key = f"{self.cache_dir}_{fname}" if self.cache_dir else fname
+            if cache_key in MultiTaskCollator._gt_cache:
+                cached = MultiTaskCollator._gt_cache[cache_key]
+                spatial_map = cached.get('spatial')
+                if self.use_relation:
+                    relation_map = cached.get('relation')
+            elif self.cache_dir is not None:
+                # Load from disk and cache in memory
+                cache_path = self.cache_dir / f"{fname}_gt.npz"
                 if cache_path.exists():
                     try:
                         data = np.load(cache_path, allow_pickle=True)
+                        cache_entry = {}
                         if 'spatial_map' in data.files:
                             spatial_map = torch.from_numpy(data['spatial_map'].astype(np.float32))
-                        if 'relation_map' in data.files and self.use_relation:
+                            cache_entry['spatial'] = spatial_map
+                        if 'relation_map' in data.files:
                             relation_map = torch.from_numpy(data['relation_map'].astype(np.float32))
+                            cache_entry['relation'] = relation_map
+                        MultiTaskCollator._gt_cache[cache_key] = cache_entry
                     except Exception as e:
-                        pass  # Fallback to on-the-fly generation
+                        pass
                 else:
                     # Try old format: _spatial.npz
-                    old_cache_path = self.cache_dir / f"{fnames[idx]}_spatial.npz"
+                    old_cache_path = self.cache_dir / f"{fname}_spatial.npz"
                     if old_cache_path.exists():
                         try:
                             data = np.load(old_cache_path)
                             spatial_map = torch.from_numpy(data['spatial_map'].astype(np.float32))
+                            MultiTaskCollator._gt_cache[cache_key] = {'spatial': spatial_map}
                         except:
                             pass
             
@@ -359,6 +377,8 @@ class CROHMEDatamodule(pl.LightningDataModule):
             shuffle=True,
             num_workers=self.num_workers,
             collate_fn=self._get_collate_fn("train"),
+            pin_memory=True,
+            persistent_workers=True if self.num_workers > 0 else False,
         )
 
     def val_dataloader(self):
@@ -367,6 +387,8 @@ class CROHMEDatamodule(pl.LightningDataModule):
             shuffle=False,
             num_workers=self.num_workers,
             collate_fn=self._get_collate_fn(self.test_year),
+            pin_memory=True,
+            persistent_workers=True if self.num_workers > 0 else False,
         )
 
     def test_dataloader(self):
@@ -375,4 +397,6 @@ class CROHMEDatamodule(pl.LightningDataModule):
             shuffle=False,
             num_workers=self.num_workers,
             collate_fn=self._get_collate_fn(self.test_year),
+            pin_memory=True,
+            persistent_workers=True if self.num_workers > 0 else False,
         )
