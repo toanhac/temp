@@ -58,7 +58,6 @@ class LitCoMER(pl.LightningModule):
         coverage_aware_w2: float = 1.0,
         spatial_hidden_channels: int = 256,
         relation_hidden_channels: int = 128,
-        use_spatial_guide: bool = False,
         spatial_scale: float = 1.0,
     ):
         super().__init__()
@@ -88,7 +87,6 @@ class LitCoMER(pl.LightningModule):
             use_relation_aux=use_relation_aux,
             spatial_hidden_channels=spatial_hidden_channels,
             relation_hidden_channels=relation_hidden_channels,
-            use_spatial_guide=use_spatial_guide or use_guided_coverage,
             spatial_scale=spatial_scale,
             use_guided_coverage=use_guided_coverage,
             alpha_spatial=alpha_spatial,
