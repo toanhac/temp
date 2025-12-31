@@ -129,6 +129,18 @@ class Batch:
             relation_map=relation,
         )
 
+    def pin_memory(self) -> "Batch":
+        spatial = self.spatial_map.pin_memory() if self.spatial_map is not None else None
+        relation = self.relation_map.pin_memory() if self.relation_map is not None else None
+        return Batch(
+            img_bases=self.img_bases,
+            imgs=self.imgs.pin_memory(),
+            mask=self.mask.pin_memory(),
+            indices=self.indices,
+            spatial_map=spatial,
+            relation_map=relation,
+        )
+
 
 def collate_fn(batch):
     assert len(batch) == 1
