@@ -43,11 +43,7 @@ class SpatialHead(nn.Module):
         self.refine = nn.Sequential(
             nn.Conv2d(hidden_dim, hidden_dim, kernel_size=3, padding=1, bias=False),
             nn.BatchNorm2d(hidden_dim),
-            nn.ReLU(inplace=True),
-            nn.Dropout2d(0.1),
-            nn.Conv2d(hidden_dim, hidden_dim, kernel_size=3, padding=1, bias=False),
-            nn.BatchNorm2d(hidden_dim),
-            nn.ReLU(inplace=True),
+            nn.ReLU(inplace=True)
         )
         
         self.output = nn.Sequential(
@@ -101,11 +97,7 @@ class RelationHead(nn.Module):
             nn.Dropout2d(dropout),
             nn.Conv2d(hidden_dim, hidden_dim, kernel_size=3, padding=1, bias=False),
             nn.BatchNorm2d(hidden_dim),
-            nn.ReLU(inplace=True),
-            nn.Dropout2d(dropout),
-            nn.Conv2d(hidden_dim, hidden_dim, kernel_size=3, padding=1, bias=False),
-            nn.BatchNorm2d(hidden_dim),
-            nn.ReLU(inplace=True),
+            nn.ReLU(inplace=True)
         )
         
         self.output = nn.Sequential(
