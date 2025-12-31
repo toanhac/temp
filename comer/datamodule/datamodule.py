@@ -88,7 +88,13 @@ def data_iterator(
     fname_total.append(fname_batch)
     feature_total.append(feature_batch)
     label_total.append(label_batch)
-    print("total ", len(feature_total), "batch data loaded")
+    
+    # Debug: Print batch size distribution
+    batch_sizes = [len(b) for b in feature_total]
+    print(f"total {len(feature_total)} batches loaded")
+    print(f"  Batch size distribution: min={min(batch_sizes)}, max={max(batch_sizes)}, avg={sum(batch_sizes)/len(batch_sizes):.1f}")
+    print(f"  Batches with size 1: {sum(1 for s in batch_sizes if s == 1)}")
+    
     return list(zip(fname_total, feature_total, label_total))
 
 
@@ -176,6 +182,7 @@ class MultiTaskCollator:
     
     # Class-level cache shared across instances
     _gt_cache = {}
+    _file_exists_cache = {}  # Cache for file existence checks
     
     def __init__(
         self, 
@@ -186,6 +193,15 @@ class MultiTaskCollator:
         self.cache_dir = Path(cache_dir) if cache_dir else None
         self.generate_gt_on_fly = generate_gt_on_fly
         self.use_relation = use_relation
+        
+        # Preload file existence info to avoid repeated .exists() calls
+        if self.cache_dir is not None and str(self.cache_dir) not in MultiTaskCollator._file_exists_cache:
+            existing_files = set()
+            if self.cache_dir.exists():
+                for f in self.cache_dir.iterdir():
+                    existing_files.add(f.name)
+            MultiTaskCollator._file_exists_cache[str(self.cache_dir)] = existing_files
+            print(f"  Preloaded {len(existing_files)} cache files from {self.cache_dir}")
     
     def __call__(self, batch):
         assert len(batch) == 1
@@ -225,9 +241,13 @@ class MultiTaskCollator:
                 if self.use_relation:
                     relation_map = cached.get('relation')
             elif self.cache_dir is not None:
-                # Load from disk and cache in memory
-                cache_path = self.cache_dir / f"{fname}_gt.npz"
-                if cache_path.exists():
+                # Use preloaded file existence cache (fast set lookup instead of .exists())
+                cache_dir_key = str(self.cache_dir)
+                existing_files = MultiTaskCollator._file_exists_cache.get(cache_dir_key, set())
+                
+                gt_filename = f"{fname}_gt.npz"
+                if gt_filename in existing_files:
+                    cache_path = self.cache_dir / gt_filename
                     try:
                         data = np.load(cache_path, allow_pickle=True)
                         cache_entry = {}
@@ -242,8 +262,9 @@ class MultiTaskCollator:
                         pass
                 else:
                     # Try old format: _spatial.npz
-                    old_cache_path = self.cache_dir / f"{fname}_spatial.npz"
-                    if old_cache_path.exists():
+                    old_filename = f"{fname}_spatial.npz"
+                    if old_filename in existing_files:
+                        old_cache_path = self.cache_dir / old_filename
                         try:
                             data = np.load(old_cache_path)
                             spatial_map = torch.from_numpy(data['spatial_map'].astype(np.float32))

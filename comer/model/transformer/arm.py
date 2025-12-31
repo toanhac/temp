@@ -36,7 +36,6 @@ class AttentionRefinementModule(nn.Module):
         alpha_relation: float = 0.2,
         coverage_aware_w1: float = 2.0,
         coverage_aware_w2: float = 1.0,
-        use_spatial_guide: bool = False,
         spatial_scale: float = 1.0,
         alpha_min: float = 0.01,
         alpha_max: float = 2.0,
@@ -47,7 +46,7 @@ class AttentionRefinementModule(nn.Module):
         self.cross_coverage = cross_coverage
         self.self_coverage = self_coverage
         
-        self.use_guided_coverage = use_guided_coverage or use_spatial_guide
+        self.use_guided_coverage = use_guided_coverage
         self.coverage_aware_w1 = coverage_aware_w1
         self.coverage_aware_w2 = coverage_aware_w2
         self.alpha_min = alpha_min

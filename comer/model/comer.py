@@ -41,7 +41,6 @@ class CoMER(pl.LightningModule):
         spatial_hidden_channels: int = 64,
         relation_hidden_channels: int = 128,
         num_relation_classes: int = 7,
-        use_spatial_guide: bool = False,
         use_guided_coverage: bool = False,
         spatial_scale: float = 1.0,
         alpha_spatial: float = 0.3,
@@ -58,7 +57,7 @@ class CoMER(pl.LightningModule):
             fusion_out_channels=fusion_out_channels,
         )
         
-        decoder_use_spatial_guide = use_spatial_guide or use_guided_coverage
+
         
         self.decoder = Decoder(
             d_model=d_model,
@@ -69,7 +68,6 @@ class CoMER(pl.LightningModule):
             dc=dc,
             cross_coverage=cross_coverage,
             self_coverage=self_coverage,
-            use_spatial_guide=decoder_use_spatial_guide,
             spatial_scale=spatial_scale,
             use_guided_coverage=use_guided_coverage,
             alpha_spatial=alpha_spatial,
@@ -80,7 +78,6 @@ class CoMER(pl.LightningModule):
         
         self.use_spatial_aux = use_spatial_aux
         self.use_relation_aux = use_relation_aux
-        self.use_spatial_guide = use_spatial_guide
         self.use_guided_coverage = use_guided_coverage
         
         self.spatial_head = None
@@ -139,7 +136,7 @@ class CoMER(pl.LightningModule):
         spatial_for_guide = None
         relation_for_guide = None
         
-        if self.use_spatial_guide or self.use_guided_coverage:
+        if self.use_guided_coverage:
             if spatial_map_gt is not None:
                 spatial_for_guide = spatial_map_gt
             elif spatial_pred is not None:
@@ -206,7 +203,7 @@ class CoMER(pl.LightningModule):
         spatial_for_guide = None
         relation_for_guide = None
         
-        if self.use_spatial_guide or self.use_guided_coverage:
+        if self.use_guided_coverage:
             if spatial_map is not None:
                 spatial_for_guide = spatial_map
             elif self.use_spatial_aux and self.spatial_head is not None:
