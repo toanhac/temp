@@ -18,7 +18,11 @@ from .spatial_gt import AuxiliaryTargetGenerator
 
 Data = List[Tuple[str, Image.Image, List[str]]]
 
-MAX_SIZE = 32e4
+import cv2
+
+cv2.setNumThreads(0)
+
+MAX_SIZE = 32e5  # Increased from 32e4 to allow larger batches
 ENCODER_DOWNSAMPLE_FACTOR = 16
 
 
